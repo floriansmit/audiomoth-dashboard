@@ -295,6 +295,65 @@ def render_sticky_dashboard_header(location, date_range, total_observations):
     )
 
 
+def auto_time_resolution(start_time, end_time):
+    span = end_time - start_time
+    if span <= pd.Timedelta(days=4):
+        return "Hour"
+    if span <= pd.Timedelta(days=90):
+        return "Day"
+    return "Week"
+
+
+def time_resolution_settings(resolution):
+    settings = {
+        "Hour": {
+            "freq": "h",
+            "label": "Recording hour",
+            "axis": "Date and hour",
+            "format": "%d %b %H:%M",
+        },
+        "Day": {
+            "freq": "D",
+            "label": "Recording date",
+            "axis": "Date",
+            "format": "%d %b %Y",
+        },
+        "Week": {
+            "freq": "W-MON",
+            "label": "Recording week",
+            "axis": "Week starting",
+            "format": "%d %b %Y",
+        },
+    }
+    return settings[resolution]
+
+
+def add_time_bin(df, resolution):
+    settings = time_resolution_settings(resolution)
+    result = df.copy()
+    if resolution == "Week":
+        result["TimeBin"] = result["DateTime"].dt.to_period("W-SUN").dt.start_time
+    else:
+        result["TimeBin"] = result["DateTime"].dt.floor(settings["freq"])
+    return result
+
+
+def complete_time_counts(df, resolution):
+    settings = time_resolution_settings(resolution)
+    timeline = add_time_bin(df, resolution)
+    counts = timeline.groupby("TimeBin").size().reset_index(name="Count")
+    full_range = pd.date_range(
+        start=timeline["TimeBin"].min(),
+        end=timeline["TimeBin"].max(),
+        freq=settings["freq"],
+    )
+    full_df = pd.DataFrame({"TimeBin": full_range})
+    counts = full_df.merge(counts, on="TimeBin", how="left")
+    counts["Count"] = counts["Count"].fillna(0).astype(int)
+    counts["TimeLabel"] = counts["TimeBin"].dt.strftime(settings["format"])
+    return counts
+
+
 def resolve_audio_path(row, data_root):
     candidates = []
     for column in ("relative_audio_path", "BeginPath"):
@@ -1714,24 +1773,39 @@ with col2:
 
 st.header("2. Species Occurrence Matrix")
 
-matrix_df = df.copy()
-matrix_df["Date"] = matrix_df["DateTime"].dt.date
+auto_resolution = auto_time_resolution(start_time, end_time)
+resolution_options = ["Auto", "Hour", "Day", "Week"]
+resolution_choice = st.radio(
+    "Time resolution",
+    resolution_options,
+    index=0,
+    horizontal=True,
+    help="Auto uses hourly bins for short datasets, daily bins for medium datasets, and weekly bins for longer deployments.",
+)
+time_resolution = auto_resolution if resolution_choice == "Auto" else resolution_choice
+time_settings = time_resolution_settings(time_resolution)
+st.caption(f"Showing detections by {time_resolution.lower()}. Auto would use: {auto_resolution.lower()}.")
+
+matrix_df = add_time_bin(df, time_resolution)
+matrix_df["TimeLabel"] = matrix_df["TimeBin"].dt.strftime(time_settings["format"])
 occurrence_matrix = matrix_df.pivot_table(
     index="CommonName",
-    columns="Date",
+    columns="TimeLabel",
     values="Confidence",
     aggfunc="size",
     fill_value=0,
 )
 occurrence_matrix = occurrence_matrix.loc[occurrence_matrix.sum(axis=1).sort_values(ascending=False).index]
+ordered_time_labels = matrix_df[["TimeBin", "TimeLabel"]].drop_duplicates().sort_values("TimeBin")["TimeLabel"].tolist()
+occurrence_matrix = occurrence_matrix.reindex(columns=ordered_time_labels, fill_value=0)
 
 matrix_height = max(420, min(1200, 26 * len(occurrence_matrix)))
 matrix_fig = px.imshow(
     occurrence_matrix,
-    labels={"x": "Recording date", "y": "Species", "color": "Detections"},
+    labels={"x": time_settings["label"], "y": "Species", "color": "Detections"},
     color_continuous_scale="YlGnBu",
     aspect="auto",
-    text_auto=True,
+    text_auto=len(occurrence_matrix.columns) <= 60,
 )
 matrix_fig.update_layout(height=matrix_height, margin=dict(l=10, r=10, t=20, b=10))
 matrix_fig.update_xaxes(side="top")
@@ -1789,23 +1863,21 @@ with st.expander("Species profile", expanded=True):
         else:
             st.info("No Wikipedia profile found for this selection.")
 
-st.header("4. Hourly Temporal Pattern")
+st.header("4. Temporal Pattern")
 
-timeline = species_df.copy()
-timeline["Hour"] = timeline["DateTime"].dt.floor("h")
-hourly_counts = timeline.groupby("Hour").size().reset_index(name="Count")
-
-full_hourly_range = pd.date_range(
-    start=timeline["Hour"].min(),
-    end=timeline["Hour"].max(),
-    freq="h",
+temporal_counts = complete_time_counts(species_df, time_resolution)
+temporal_title = {
+    "Hour": "Hourly",
+    "Day": "Daily",
+    "Week": "Weekly",
+}[time_resolution]
+fig2 = px.bar(
+    temporal_counts,
+    x="TimeBin",
+    y="Count",
+    title=f"{temporal_title} detections of {selected_species}",
 )
-full_hourly_df = pd.DataFrame({"Hour": full_hourly_range})
-hourly_counts = full_hourly_df.merge(hourly_counts, on="Hour", how="left")
-hourly_counts["Count"] = hourly_counts["Count"].fillna(0)
-
-fig2 = px.bar(hourly_counts, x="Hour", y="Count", title=f"Hourly detections of {selected_species}")
-fig2.update_layout(xaxis_title="Date and hour", yaxis_title="Detections")
+fig2.update_layout(xaxis_title=time_settings["axis"], yaxis_title="Detections")
 st.plotly_chart(fig2, use_container_width=True)
 
 st.header("5. Detection Inspector")
