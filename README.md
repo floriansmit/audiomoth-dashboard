@@ -175,6 +175,15 @@ Do not commit real field recordings, generated analyzer outputs, or DuckDB datab
 
 For troubleshooting, see [docs/troubleshooting.md](docs/troubleshooting.md).
 
+## Acknowledgements
+
+AudioMoth Dashboard uses external bioacoustic tools through their published Python packages and command-line interfaces:
+
+- [BirdNET Analyzer](https://github.com/birdnet-team/BirdNET-Analyzer) for bird and wildlife sound classification.
+- [BatDetect2](https://github.com/macaodha/batdetect2) for detecting and classifying bat echolocation calls.
+
+These projects are installed as dependencies from `requirements.txt` and are called by the dashboard during processing. This repository does not vendor, redistribute, or modify their source code. Please refer to the respective projects for their documentation, licenses, citation guidance, and model details.
+
 ## License
 
 This project is released under the MIT License. See [LICENSE](LICENSE).
