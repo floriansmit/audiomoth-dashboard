@@ -304,8 +304,25 @@ def auto_time_resolution(start_time, end_time):
     return "Week"
 
 
+def auto_temporal_resolution(start_time, end_time):
+    span = end_time - start_time
+    if span <= pd.Timedelta(hours=12):
+        return "Minute"
+    if span <= pd.Timedelta(days=7):
+        return "Hour"
+    if span <= pd.Timedelta(days=120):
+        return "Day"
+    return "Week"
+
+
 def time_resolution_settings(resolution):
     settings = {
+        "Minute": {
+            "freq": "min",
+            "label": "Recording minute",
+            "axis": "Date and minute",
+            "format": "%d %b %H:%M",
+        },
         "Hour": {
             "freq": "h",
             "label": "Recording hour",
@@ -1774,20 +1791,20 @@ with col2:
 st.header("2. Species Occurrence Matrix")
 
 auto_resolution = auto_time_resolution(start_time, end_time)
-resolution_options = ["Auto", "Hour", "Day", "Week"]
-resolution_choice = st.radio(
-    "Time resolution",
-    resolution_options,
+matrix_resolution_options = ["Auto", "Hour", "Day", "Week"]
+matrix_resolution_choice = st.radio(
+    "Matrix time resolution",
+    matrix_resolution_options,
     index=0,
     horizontal=True,
     help="Auto uses hourly bins for short datasets, daily bins for medium datasets, and weekly bins for longer deployments.",
 )
-time_resolution = auto_resolution if resolution_choice == "Auto" else resolution_choice
-time_settings = time_resolution_settings(time_resolution)
-st.caption(f"Showing detections by {time_resolution.lower()}. Auto would use: {auto_resolution.lower()}.")
+matrix_resolution = auto_resolution if matrix_resolution_choice == "Auto" else matrix_resolution_choice
+matrix_settings = time_resolution_settings(matrix_resolution)
+st.caption(f"Matrix shows detections by {matrix_resolution.lower()}. Auto would use: {auto_resolution.lower()}.")
 
-matrix_df = add_time_bin(df, time_resolution)
-matrix_df["TimeLabel"] = matrix_df["TimeBin"].dt.strftime(time_settings["format"])
+matrix_df = add_time_bin(df, matrix_resolution)
+matrix_df["TimeLabel"] = matrix_df["TimeBin"].dt.strftime(matrix_settings["format"])
 occurrence_matrix = matrix_df.pivot_table(
     index="CommonName",
     columns="TimeLabel",
@@ -1802,7 +1819,7 @@ occurrence_matrix = occurrence_matrix.reindex(columns=ordered_time_labels, fill_
 matrix_height = max(420, min(1200, 26 * len(occurrence_matrix)))
 matrix_fig = px.imshow(
     occurrence_matrix,
-    labels={"x": time_settings["label"], "y": "Species", "color": "Detections"},
+    labels={"x": matrix_settings["label"], "y": "Species", "color": "Detections"},
     color_continuous_scale="YlGnBu",
     aspect="auto",
     text_auto=len(occurrence_matrix.columns) <= 60,
@@ -1865,19 +1882,33 @@ with st.expander("Species profile", expanded=True):
 
 st.header("4. Temporal Pattern")
 
-temporal_counts = complete_time_counts(species_df, time_resolution)
+auto_temporal = auto_temporal_resolution(species_df["DateTime"].min(), species_df["DateTime"].max())
+temporal_resolution_options = ["Auto", "Minute", "Hour", "Day", "Week"]
+temporal_resolution_choice = st.radio(
+    "Temporal plot resolution",
+    temporal_resolution_options,
+    index=0,
+    horizontal=True,
+    help="Minute bins are useful for short recordings or single-night deployments. Longer spans are usually easier to read by hour, day, or week.",
+)
+temporal_resolution = auto_temporal if temporal_resolution_choice == "Auto" else temporal_resolution_choice
+temporal_settings = time_resolution_settings(temporal_resolution)
+st.caption(f"Temporal plot shows detections by {temporal_resolution.lower()}. Auto would use: {auto_temporal.lower()}.")
+
+temporal_counts = complete_time_counts(species_df, temporal_resolution)
 temporal_title = {
+    "Minute": "Minute-by-minute",
     "Hour": "Hourly",
     "Day": "Daily",
     "Week": "Weekly",
-}[time_resolution]
+}[temporal_resolution]
 fig2 = px.bar(
     temporal_counts,
     x="TimeBin",
     y="Count",
     title=f"{temporal_title} detections of {selected_species}",
 )
-fig2.update_layout(xaxis_title=time_settings["axis"], yaxis_title="Detections")
+fig2.update_layout(xaxis_title=temporal_settings["axis"], yaxis_title="Detections")
 st.plotly_chart(fig2, use_container_width=True)
 
 st.header("5. Detection Inspector")
