@@ -371,6 +371,13 @@ def complete_time_counts(df, resolution):
     return counts
 
 
+def render_detection_count_note():
+    st.info(
+        "Counts are detection activity, not animal abundance. BirdNET rows are species predictions for short audio windows, "
+        "while BatDetect2 rows are detected bat call events; one individual can produce multiple detections."
+    )
+
+
 def resolve_audio_path(row, data_root):
     candidates = []
     for column in ("relative_audio_path", "BeginPath"):
@@ -1787,6 +1794,8 @@ with col2:
         ticktext=["1", "2", "5", "10", "20", "50", "100", "200", "500", "1k", "2k", "5k", "10k"],
     )
     st.plotly_chart(fig, use_container_width=True)
+
+render_detection_count_note()
 
 st.header("2. Species Occurrence Matrix")
 
