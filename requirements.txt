@@ -1,0 +1,15 @@
+duckdb
+beautifulsoup4
+birdnet_analyzer
+batdetect2
+folium
+pandas
+streamlit
+streamlit-folium
+librosa
+matplotlib
+numpy
+plotly
+pydeck
+requests
+soundfile

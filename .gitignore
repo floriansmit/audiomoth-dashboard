@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tmp_test/
+
+# Local virtual environments
+.venv/
+venv/
+env/
+
+# Streamlit and local runtime state
+.streamlit/secrets.toml
+*.log
+
+# Local datasets and generated databases
+datasets/**
+!datasets/
+!datasets/.gitkeep
+
+# Audio and analyzer outputs, in case data is stored outside datasets/
+*.wav
+*.WAV
+*.flac
+*.FLAC
+*.mp3
+*.MP3
+*.duckdb
+*.duckdb.wal
+*.duckdb.tmp
+*.BirdNET.selection.table.txt
+*.BirdNET.selection.table.csv
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
