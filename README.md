@@ -4,6 +4,28 @@ AudioMoth Dashboard is a local Streamlit app for exploring AudioMoth recordings 
 
 The app is designed for local field-recording projects. Audio files, analyzer outputs, manifests, and DuckDB databases are ignored by Git by default.
 
+## Screenshots
+
+Dashboard overview with dataset metadata and location map:
+
+![Dashboard overview](docs/images/dashboard-overview.png)
+
+Species occurrence matrix and count interpretation:
+
+![Species occurrence matrix](docs/images/occurrence-matrix.png)
+
+Minute-level temporal pattern for a selected species:
+
+![Temporal pattern](docs/images/temporal-pattern.png)
+
+Detection inspector with confidence, detector, audio path, and mean dBFS:
+
+![Detection inspector](docs/images/detection-inspector.png)
+
+Bird highlights gallery:
+
+![Bird highlights gallery](docs/images/bird-highlights.png)
+
 ## Features
 
 - Organize recordings into repeatable dataset folders.
