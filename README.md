@@ -41,7 +41,7 @@ Bird highlights gallery:
 ## Folder Layout
 
 ```text
-AudioMoth-Dashboard/
+AudioMoth Dashboard/
   install_requirements.py
   requirements.txt
   run_dashboard.py
@@ -65,7 +65,7 @@ Local data is created under `datasets/`:
 ```text
 datasets/
   datasets_manifest.csv
-  birdnet.duckdb
+  audiomoth.duckdb
   01_example_location/
     audio/
     birdnet/
@@ -114,10 +114,10 @@ Optional arguments:
 ```powershell
 python run_dashboard.py --port 8503
 python run_dashboard.py --data-root "D:\AudioMoth Projects"
-python run_dashboard.py --db "D:\AudioMoth Projects\datasets\birdnet.duckdb"
+python run_dashboard.py --db "D:\AudioMoth Projects\datasets\audiomoth.duckdb"
 ```
 
-By default, the app uses the project folder as the data root and stores the database at `datasets/birdnet.duckdb`.
+By default, the app uses the project folder as the data root and stores the database at `datasets/audiomoth.duckdb`.
 
 ## First Launch
 

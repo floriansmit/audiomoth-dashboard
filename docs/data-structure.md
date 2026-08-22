@@ -7,7 +7,7 @@ AudioMoth Dashboard expects a data root with a `datasets/` folder. The app defau
 ```text
 datasets/
   datasets_manifest.csv
-  birdnet.duckdb
+  audiomoth.duckdb
   01_site_name/
     audio/
     birdnet/
@@ -20,7 +20,7 @@ Folder purpose:
 - `birdnet/`: BirdNET Analyzer selection-table outputs.
 - `batdetect2_outputs/`: BatDetect2 CSV outputs.
 - `datasets_manifest.csv`: generated dataset manifest.
-- `birdnet.duckdb`: generated dashboard database.
+- `audiomoth.duckdb`: generated dashboard database.
 
 ## BirdNET Output
 

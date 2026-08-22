@@ -12,7 +12,7 @@ import numpy as np
 import soundfile as sf
 
 
-DEFAULT_DB_PATH = "datasets/birdnet.duckdb"
+DEFAULT_DB_PATH = "datasets/audiomoth.duckdb"
 DEFAULT_MANIFEST_PATH = "datasets/datasets_manifest.csv"
 AUDIO_EXTENSIONS = (".wav", ".WAV", ".flac", ".FLAC", ".mp3", ".MP3")
 BIRDNET_SUFFIXES = (

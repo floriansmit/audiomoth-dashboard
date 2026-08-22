@@ -26,9 +26,9 @@ def main():
 
     env = os.environ.copy()
     if args.data_root:
-        env["BIRDNET_DATA_ROOT"] = str(Path(args.data_root).resolve())
+        env["AUDIOMOTH_DATA_ROOT"] = str(Path(args.data_root).resolve())
     if args.db:
-        env["BIRDNET_DB"] = str(Path(args.db).resolve())
+        env["AUDIOMOTH_DB"] = str(Path(args.db).resolve())
 
     python_path = dashboard_python()
     command = [

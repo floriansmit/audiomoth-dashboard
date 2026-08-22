@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 
-OUTPUT_SUFFIX = ".BirdNET.selection.table.txt"
+OUTPUT_SUFFIX = ".selection.table.txt"
 
 
 def species_code(common_name):
@@ -25,7 +25,7 @@ def confidence(annotation):
     return None
 
 
-def batdetect_json_to_birdnet_table(json_path, output_path):
+def batdetect_json_to_selection_table(json_path, output_path):
     data = json.loads(json_path.read_text(encoding="utf-8"))
     annotations = data.get("annotation", [])
 
@@ -88,7 +88,7 @@ def convert_outputs(batdetect_output_dir, birdnet_output_dir):
 
     for json_path in sorted(batdetect_output_dir.rglob("*.json")):
         output_path = birdnet_output_dir / matching_output_name(json_path)
-        detections += batdetect_json_to_birdnet_table(json_path, output_path)
+        detections += batdetect_json_to_selection_table(json_path, output_path)
         converted += 1
 
     return converted, detections

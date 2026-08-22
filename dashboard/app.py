@@ -34,7 +34,7 @@ except ImportError:
 APP_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_DIR.parent if APP_DIR.name.lower() == "dashboard" else APP_DIR
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
-DEFAULT_DB_PATH = PROJECT_ROOT / "datasets" / "birdnet.duckdb"
+DEFAULT_DB_PATH = PROJECT_ROOT / "datasets" / "audiomoth.duckdb"
 LOGO_PATH = APP_DIR / "assets" / "audiomoth-bird-bat-logo-sidebar.png"
 APP_TITLE = "AudioMoth Dashboard"
 AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3"}
@@ -1676,9 +1676,15 @@ with st.sidebar:
         st.image(str(LOGO_PATH), width=220)
     st.markdown(f"### {APP_TITLE}")
     st.header("Data")
-    db_path = st.text_input("Database path", value=os.environ.get("BIRDNET_DB", str(DEFAULT_DB_PATH)))
+    db_path = st.text_input(
+        "Database path",
+        value=os.environ.get("AUDIOMOTH_DB", str(DEFAULT_DB_PATH)),
+    )
     data_root = Path(
-        st.text_input("External data root", value=os.environ.get("BIRDNET_DATA_ROOT", str(PROJECT_ROOT)))
+        st.text_input(
+            "External data root",
+            value=os.environ.get("AUDIOMOTH_DATA_ROOT", str(PROJECT_ROOT)),
+        )
     ).expanduser().resolve()
     ensure_local_data_folders(data_root)
     view_mode = st.radio("View", ["Dashboard", "Processing", "Bird highlights", "Bat highlights"])
