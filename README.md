@@ -6,7 +6,9 @@ The app is designed for local field-recording projects. Audio files, analyzer ou
 
 ## Demo
 
-<video src="docs/images/AudioMoth.mp4" controls width="900"></video>
+![AudioMoth Dashboard demo](docs/images/AudioMoth.gif)
+
+[Watch the higher-quality MP4 demo](docs/images/AudioMoth.mp4)
 
 ## Features
 
