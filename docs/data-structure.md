@@ -36,7 +36,7 @@ The original BirdNET files do not need audio paths. `scripts/build_db.py` links 
 
 BatDetect2 outputs should stay in `batdetect2_outputs/`. The builder imports these as detector `batdetect2`, so bird and bat detections remain traceable to the model that produced them.
 
-When run through the dashboard or `scripts\run_batdetect2.py`, BatDetect2 skips audio files that already have matching `.csv` or `.json` outputs in `batdetect2_outputs/`. Use `--rerun-existing` only when you want to recompute all BatDetect2 outputs.
+When run through the dashboard or `scripts\run_batdetect2.py`, BatDetect2 skips audio files that already have matching `.csv` or `.json` outputs in `batdetect2_outputs/`. Audio subfolders are supported. The helper stages pending files into a temporary flat folder for BatDetect2, so filenames must be unique across subfolders. Use `--rerun-existing` only when you want to recompute all BatDetect2 outputs.
 
 ## Manifest
 

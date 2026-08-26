@@ -125,6 +125,14 @@ def pending_audio_files(audio_dir, batdetect_output_dir):
     return [path for path in audio_files(audio_dir) if not already_analyzed(path, batdetect_output_dir)]
 
 
+def duplicate_audio_names(files):
+    counts = {}
+    for path in files:
+        key = path.name.lower()
+        counts[key] = counts.get(key, 0) + 1
+    return sorted(path.name for path in files if counts[path.name.lower()] > 1)
+
+
 def link_or_copy_audio(source, target):
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -137,22 +145,31 @@ def prepare_pending_audio_dir(audio_dir, batdetect_output_dir, rerun_existing):
     files = audio_files(audio_dir)
     if rerun_existing:
         print(f"BatDetect2 will analyze all files: {len(files)}")
-        return audio_dir, None, files
+        target_files = files
+    else:
+        pending = pending_audio_files(audio_dir, batdetect_output_dir)
+        skipped = len(files) - len(pending)
+        print(f"BatDetect2 already analyzed: {skipped}")
+        print(f"BatDetect2 pending files: {len(pending)}")
+        target_files = pending
 
-    pending = pending_audio_files(audio_dir, batdetect_output_dir)
-    skipped = len(files) - len(pending)
-    print(f"BatDetect2 already analyzed: {skipped}")
-    print(f"BatDetect2 pending files: {len(pending)}")
-
-    if not pending:
+    if not target_files:
         return None, None, []
 
-    temp_dir = Path(tempfile.mkdtemp(prefix="audiomoth_batdetect2_pending_"))
-    for source in pending:
-        relative_path = source.relative_to(audio_dir)
-        link_or_copy_audio(source, temp_dir / relative_path)
+    duplicates = duplicate_audio_names(target_files)
+    if duplicates:
+        examples = ", ".join(sorted(set(duplicates))[:5])
+        raise ValueError(
+            "BatDetect2 output names are based on audio filenames, but duplicate filenames were found "
+            f"in subfolders: {examples}. Rename duplicates before running BatDetect2."
+        )
 
-    return temp_dir, temp_dir, pending
+    temp_dir = Path(tempfile.mkdtemp(prefix="audiomoth_batdetect2_pending_"))
+    for source in target_files:
+        link_or_copy_audio(source, temp_dir / source.name)
+
+    print(f"BatDetect2 staged files: {len(target_files)}")
+    return temp_dir, temp_dir, target_files
 
 
 def run_batdetect2(audio_dir, batdetect_output_dir, detection_threshold=None, model=None, rerun_existing=False):
