@@ -1562,6 +1562,17 @@ def render_processing_page(data_root, db_path):
         bat_threshold = st.number_input("BatDetect2 threshold", min_value=0.01, max_value=0.99, value=0.30, step=0.05)
     with bat_cols[1]:
         bat_model = st.text_input("BatDetect2 model checkpoint", value="")
+    rerun_batdetect = st.checkbox(
+        "Re-run files that already have BatDetect2 outputs",
+        value=False,
+        help=(
+            "Leave this off when you add new WAV files to an existing folder. "
+            "The wrapper skips audio files that already have matching .csv or .json BatDetect2 outputs."
+        ),
+    )
+    st.caption(
+        "BatDetect2 skips already analyzed files by default. Turn on re-run only when you want to recompute existing outputs."
+    )
 
     if st.button("Run BatDetect2"):
         batdetect_output_dir.mkdir(parents=True, exist_ok=True)
@@ -1577,6 +1588,8 @@ def render_processing_page(data_root, db_path):
         ]
         if bat_model.strip():
             command.extend(["--model", bat_model.strip()])
+        if rerun_batdetect:
+            command.append("--rerun-existing")
         st.code(" ".join(f'"{part}"' if " " in part else part for part in command), language="powershell")
         returncode, stdout, stderr = run_monitored_command(
             command,
@@ -1592,7 +1605,7 @@ def render_processing_page(data_root, db_path):
     st.info(
         "After running an analyzer: first regenerate the manifest. "
         "Then use Append for a brand-new dataset that has never been imported. "
-        "Use Rebuild listed datasets if you re-ran outputs for an existing dataset. "
+        "Use Rebuild listed datasets if you added files to, or re-ran outputs for, an existing dataset. "
         "Use Replace DB from manifest when you want to remove old datasets that are no longer in the manifest."
     )
 

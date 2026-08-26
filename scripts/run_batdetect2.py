@@ -1,14 +1,18 @@
 import argparse
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pandas as pd
 
 
 OUTPUT_SUFFIX = ".selection.table.txt"
+AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3"}
 
 
 def species_code(common_name):
@@ -98,12 +102,70 @@ def run_command(command):
     return subprocess.run(command, check=True, capture_output=True, text=True)
 
 
-def run_batdetect2(audio_dir, batdetect_output_dir, detection_threshold=None, model=None):
+def audio_files(audio_dir):
+    return sorted(
+        path
+        for path in audio_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS
+    )
+
+
+def expected_output_paths(audio_path, batdetect_output_dir):
+    return [
+        batdetect_output_dir / f"{audio_path.name}.csv",
+        batdetect_output_dir / f"{audio_path.name}.json",
+    ]
+
+
+def already_analyzed(audio_path, batdetect_output_dir):
+    return any(path.exists() for path in expected_output_paths(audio_path, batdetect_output_dir))
+
+
+def pending_audio_files(audio_dir, batdetect_output_dir):
+    return [path for path in audio_files(audio_dir) if not already_analyzed(path, batdetect_output_dir)]
+
+
+def link_or_copy_audio(source, target):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copy2(source, target)
+
+
+def prepare_pending_audio_dir(audio_dir, batdetect_output_dir, rerun_existing):
+    files = audio_files(audio_dir)
+    if rerun_existing:
+        print(f"BatDetect2 will analyze all files: {len(files)}")
+        return audio_dir, None, files
+
+    pending = pending_audio_files(audio_dir, batdetect_output_dir)
+    skipped = len(files) - len(pending)
+    print(f"BatDetect2 already analyzed: {skipped}")
+    print(f"BatDetect2 pending files: {len(pending)}")
+
+    if not pending:
+        return None, None, []
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="audiomoth_batdetect2_pending_"))
+    for source in pending:
+        relative_path = source.relative_to(audio_dir)
+        link_or_copy_audio(source, temp_dir / relative_path)
+
+    return temp_dir, temp_dir, pending
+
+
+def run_batdetect2(audio_dir, batdetect_output_dir, detection_threshold=None, model=None, rerun_existing=False):
+    input_dir, temp_dir, pending = prepare_pending_audio_dir(audio_dir, batdetect_output_dir, rerun_existing)
+    if input_dir is None:
+        print("No new audio files need BatDetect2 analysis.")
+        return
+
     command = [
         "batdetect2",
         "process",
         "directory",
-        str(audio_dir),
+        str(input_dir),
         str(batdetect_output_dir),
     ]
 
@@ -124,12 +186,15 @@ def run_batdetect2(audio_dir, batdetect_output_dir, detection_threshold=None, mo
         legacy_command = [
             "batdetect2",
             "detect",
-            str(audio_dir),
+            str(input_dir),
             str(batdetect_output_dir),
             str(legacy_threshold),
         ]
         print("Detected BatDetect2 1.x CLI. Falling back to: batdetect2 detect ...")
         run_command(legacy_command)
+    finally:
+        if temp_dir is not None:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def main():
@@ -143,6 +208,11 @@ def main():
     )
     parser.add_argument("--detection-threshold", type=float, help="Optional BatDetect2 detection threshold.")
     parser.add_argument("--model", help="Optional custom BatDetect2 model checkpoint.")
+    parser.add_argument(
+        "--rerun-existing",
+        action="store_true",
+        help="Analyze all audio files, even when matching BatDetect2 CSV/JSON outputs already exist.",
+    )
     args = parser.parse_args()
 
     audio_dir = Path(args.audio_dir).resolve()
@@ -152,7 +222,7 @@ def main():
     batdetect_output_dir = Path(args.batdetect_output_dir).resolve() if args.batdetect_output_dir else audio_dir.parent / "batdetect2_outputs"
 
     try:
-        run_batdetect2(audio_dir, batdetect_output_dir, args.detection_threshold, args.model)
+        run_batdetect2(audio_dir, batdetect_output_dir, args.detection_threshold, args.model, args.rerun_existing)
     except FileNotFoundError:
         print(
             "Could not find the 'batdetect2' command. Install it first with:\n"

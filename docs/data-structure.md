@@ -36,6 +36,8 @@ The original BirdNET files do not need audio paths. `scripts/build_db.py` links 
 
 BatDetect2 outputs should stay in `batdetect2_outputs/`. The builder imports these as detector `batdetect2`, so bird and bat detections remain traceable to the model that produced them.
 
+When run through the dashboard or `scripts\run_batdetect2.py`, BatDetect2 skips audio files that already have matching `.csv` or `.json` outputs in `batdetect2_outputs/`. Use `--rerun-existing` only when you want to recompute all BatDetect2 outputs.
+
 ## Manifest
 
 Generate the manifest from the Processing page or with:
@@ -66,7 +68,7 @@ Build or update the database from the Processing page, or run:
 python scripts\build_db.py --data-root "."
 ```
 
-Use `--append` for brand-new datasets. Use the normal rebuild command when analyzer outputs changed for datasets already in the database.
+Use `--append` for brand-new datasets. Use the normal rebuild command when analyzer outputs changed or new audio files were added for datasets already in the database.
 
 ## GitHub Safety
 

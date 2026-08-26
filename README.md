@@ -175,6 +175,12 @@ Run BatDetect2 manually:
 python scripts\run_batdetect2.py --audio-dir "datasets\01_site_name\audio"
 ```
 
+By default, the BatDetect2 helper skips audio files that already have matching `.csv` or `.json` outputs in `batdetect2_outputs/`. This is useful when you add extra WAV files to an existing dataset. To deliberately recompute every file, add:
+
+```powershell
+python scripts\run_batdetect2.py --audio-dir "datasets\01_site_name\audio" --rerun-existing
+```
+
 ## Public Repository Notes
 
 Do not commit real field recordings, generated analyzer outputs, or DuckDB databases unless you explicitly intend to publish those data. The included `.gitignore` keeps these local by default.
