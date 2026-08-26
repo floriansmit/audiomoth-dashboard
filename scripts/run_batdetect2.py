@@ -206,6 +206,7 @@ def run_batdetect2(audio_dir, batdetect_output_dir, detection_threshold=None, mo
             str(input_dir),
             str(batdetect_output_dir),
             str(legacy_threshold),
+            "--save_preds_if_empty",
         ]
         print("Detected BatDetect2 1.x CLI. Falling back to: batdetect2 detect ...")
         run_command(legacy_command)

@@ -914,10 +914,34 @@ def output_files(folder, suffixes):
     ]
 
 
+def output_unit_count(folder, suffixes):
+    units = set()
+    for path in output_files(folder, suffixes):
+        name = path.name
+        for suffix in sorted(suffixes, key=len, reverse=True):
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+                break
+        units.add(name)
+    return len(units)
+
+
+def audio_has_direct_outputs(audio_path, output_dir, suffixes):
+    return any((output_dir / f"{audio_path.name}{suffix}").exists() for suffix in suffixes)
+
+
 def run_monitored_command(command, cwd, label, audio_dir, output_dir, output_suffixes):
     audio_list = audio_files(audio_dir)
+    direct_output_monitor = set(output_suffixes) == {".csv", ".json"}
+    if direct_output_monitor:
+        monitor_audio_list = [
+            path for path in audio_list if not audio_has_direct_outputs(path, output_dir, output_suffixes)
+        ]
+    else:
+        monitor_audio_list = audio_list
     total_files = len(audio_list)
-    initial_outputs = len(output_files(output_dir, output_suffixes))
+    initial_outputs = output_unit_count(output_dir, output_suffixes)
+    expected_new_outputs = len(monitor_audio_list) if direct_output_monitor else max(0, total_files - initial_outputs)
 
     progress_bar = st.progress(0.0, text=f"{label}: starting...")
     status_box = st.empty()
@@ -940,23 +964,24 @@ def run_monitored_command(command, cwd, label, audio_dir, output_dir, output_suf
         )
 
         while process.poll() is None:
-            current_outputs = len(output_files(output_dir, output_suffixes))
-            done_files = min(current_outputs, total_files) if total_files else current_outputs
+            current_outputs = output_unit_count(output_dir, output_suffixes)
             new_outputs = max(0, current_outputs - initial_outputs)
+            monitor_total = expected_new_outputs if expected_new_outputs else total_files
+            done_files = min(new_outputs, monitor_total) if expected_new_outputs else min(current_outputs, total_files)
             elapsed = time.time() - started
 
-            if total_files:
-                fraction = min(1.0, done_files / total_files)
-                current_index = min(done_files, total_files - 1)
-                current_name = audio_list[current_index].name if audio_list else "unknown"
+            if monitor_total:
+                fraction = min(1.0, done_files / monitor_total)
+                current_index = min(done_files, len(monitor_audio_list) - 1)
+                current_name = monitor_audio_list[current_index].name if monitor_audio_list else "unknown"
                 eta = None
                 if new_outputs > 0:
-                    remaining = max(0, total_files - done_files)
+                    remaining = max(0, monitor_total - done_files)
                     seconds_per_file = elapsed / new_outputs
                     eta = remaining * seconds_per_file
                 progress_bar.progress(
                     fraction,
-                    text=f"{label}: {done_files}/{total_files} files",
+                    text=f"{label}: {done_files}/{monitor_total} new files",
                 )
                 status_box.info(
                     f"Likely current file: {current_name}\n\n"
@@ -975,12 +1000,14 @@ def run_monitored_command(command, cwd, label, audio_dir, output_dir, output_suf
         stdout = stdout_path.read_text(encoding="utf-8", errors="replace")
         stderr = stderr_path.read_text(encoding="utf-8", errors="replace")
 
-        final_outputs = len(output_files(output_dir, output_suffixes))
-        final_done = min(final_outputs, total_files) if total_files else final_outputs
-        if total_files:
+        final_outputs = output_unit_count(output_dir, output_suffixes)
+        final_new_outputs = max(0, final_outputs - initial_outputs)
+        monitor_total = expected_new_outputs if expected_new_outputs else total_files
+        final_done = min(final_new_outputs, monitor_total) if expected_new_outputs else min(final_outputs, total_files)
+        if monitor_total:
             progress_bar.progress(
-                min(1.0, final_done / total_files),
-                text=f"{label}: {final_done}/{total_files} files",
+                min(1.0, final_done / monitor_total),
+                text=f"{label}: {final_done}/{monitor_total} new files",
             )
         if returncode == 0:
             status_box.success(f"{label} finished. Output files now found: {final_outputs}.")
