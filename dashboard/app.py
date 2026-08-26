@@ -109,11 +109,7 @@ def has_platform_schema(con):
     return {"datasets", "recordings", "detections"}.issubset(set(tables))
 
 
-def load_platform_data(con):
-    dataset_columns = con.execute("PRAGMA table_info('datasets')").df()["name"].tolist()
-    detection_columns = con.execute("PRAGMA table_info('detections')").df()["name"].tolist()
-    tables = con.execute("SHOW TABLES").df()["name"].tolist()
-    has_audio_metrics = "detection_audio_metrics" in tables
+def load_platform_datasets(con):
     datasets = con.execute("SELECT * FROM datasets").df()
     if "dataset_type" not in datasets.columns:
         datasets["dataset_type"] = np.where(
@@ -121,6 +117,14 @@ def load_platform_data(con):
             "bats",
             "birds",
         )
+    return datasets
+
+
+def load_platform_detections(con, detector=None, dataset_ids=None):
+    dataset_columns = con.execute("PRAGMA table_info('datasets')").df()["name"].tolist()
+    detection_columns = con.execute("PRAGMA table_info('detections')").df()["name"].tolist()
+    tables = con.execute("SHOW TABLES").df()["name"].tolist()
+    has_audio_metrics = "detection_audio_metrics" in tables
 
     dataset_type_sql = (
         "ds.dataset_type"
@@ -134,36 +138,68 @@ def load_platform_data(con):
         else ""
     )
     detector_select_sql = "d.Detector" if "Detector" in detection_columns else "'birdnet' AS Detector"
-    detections = con.execute(
-        f"""
-        SELECT
-            d.detection_id,
-            d.dataset_id,
-            {dataset_type_sql},
-            {detector_select_sql},
-            ds.location_name,
-            ds.latitude,
-            ds.longitude,
-            ds.period_label,
-            d.recording_id,
-            r.relative_audio_path,
-            d.CommonName,
-            d.Confidence,
-            d.BeginPath,
-            d.BeginTime,
-            d.EndTime,
-            d.DateTime,
-            d.SpeciesCode,
-            d.LowFreqHz,
-            d.HighFreqHz,
-            d.SourceTable,
-            {metrics_select_sql}
-        FROM detections d
-        LEFT JOIN datasets ds ON d.dataset_id = ds.dataset_id
-        LEFT JOIN recordings r ON d.recording_id = r.recording_id
-        {metrics_join_sql}
-        """
-    ).df()
+    detector_filter_sql = ""
+    params = []
+    if detector:
+        if "Detector" in detection_columns:
+            detector_filter_sql = "AND lower(COALESCE(d.Detector, 'birdnet')) = ?"
+            params.append(str(detector).lower())
+        elif str(detector).lower() != "birdnet":
+            detector_filter_sql = "AND 1 = 0"
+
+    dataset_filter_sql = ""
+    if dataset_ids is not None:
+        selected_ids = [str(dataset_id) for dataset_id in dataset_ids]
+        if not selected_ids:
+            return pd.DataFrame()
+        con.register("selected_detection_datasets", pd.DataFrame({"dataset_id": selected_ids}))
+        dataset_filter_sql = "AND d.dataset_id IN (SELECT dataset_id FROM selected_detection_datasets)"
+
+    try:
+        detections = con.execute(
+            f"""
+            SELECT
+                d.detection_id,
+                d.dataset_id,
+                {dataset_type_sql},
+                {detector_select_sql},
+                ds.location_name,
+                ds.latitude,
+                ds.longitude,
+                ds.period_label,
+                d.recording_id,
+                r.relative_audio_path,
+                d.CommonName,
+                d.Confidence,
+                d.BeginPath,
+                d.BeginTime,
+                d.EndTime,
+                d.DateTime,
+                d.SpeciesCode,
+                d.LowFreqHz,
+                d.HighFreqHz,
+                d.SourceTable,
+                {metrics_select_sql}
+            FROM detections d
+            LEFT JOIN datasets ds ON d.dataset_id = ds.dataset_id
+            LEFT JOIN recordings r ON d.recording_id = r.recording_id
+            {metrics_join_sql}
+            WHERE 1 = 1
+            {detector_filter_sql}
+            {dataset_filter_sql}
+            """,
+            params,
+        ).df()
+    finally:
+        if dataset_ids is not None:
+            con.unregister("selected_detection_datasets")
+
+    return detections
+
+
+def load_platform_data(con):
+    datasets = load_platform_datasets(con)
+    detections = load_platform_detections(con)
     return datasets, detections
 
 
@@ -773,6 +809,62 @@ def wikipedia_species_image(species_name):
     return profile.get("image_url") if profile else None
 
 
+def render_highlight_scope_selector(datasets, dataset_labels, selected_dataset_id, gallery_type):
+    scope_key = f"{gallery_type}_highlight_scope"
+    selected_key = f"{gallery_type}_highlight_selected"
+
+    st.subheader("Highlight Scope")
+    with st.form(f"{gallery_type}_highlight_scope_form"):
+        scope = st.radio(
+            "Use detections from",
+            ["Current dataset", "Selected datasets", "All datasets"],
+            horizontal=True,
+            key=f"{gallery_type}_highlight_scope_radio",
+        )
+
+        chosen_dataset_ids = []
+        if scope == "Selected datasets":
+            chosen_labels = st.multiselect(
+                "Datasets",
+                list(dataset_labels.keys()),
+                default=[label for label, dataset_id in dataset_labels.items() if dataset_id == selected_dataset_id],
+                key=f"{gallery_type}_highlight_dataset_multiselect",
+            )
+            chosen_dataset_ids = [dataset_labels[label] for label in chosen_labels]
+
+        submitted = st.form_submit_button("Generate highlights")
+
+    if submitted:
+        if scope == "Current dataset":
+            chosen_dataset_ids = [selected_dataset_id]
+        elif scope == "All datasets":
+            chosen_dataset_ids = datasets["dataset_id"].tolist()
+
+        st.session_state[scope_key] = scope
+        st.session_state[selected_key] = chosen_dataset_ids
+
+    if selected_key not in st.session_state:
+        st.info("Choose a scope and press Generate highlights.")
+        return None
+
+    selected_ids = st.session_state[selected_key]
+    if not selected_ids:
+        st.warning("Select at least one dataset before generating highlights.")
+        return None
+
+    selected_labels = [
+        label
+        for label, dataset_id in dataset_labels.items()
+        if dataset_id in set(selected_ids)
+    ]
+    if st.session_state.get(scope_key) == "All datasets":
+        st.caption(f"Generated from all datasets: {len(selected_ids)} selected.")
+    else:
+        st.caption("Generated from: " + ", ".join(selected_labels))
+
+    return selected_ids
+
+
 def render_gallery(gallery_df, data_root, gallery_type):
     label = "Bird" if gallery_type == "birdnet" else "Bat"
     st.header(f"{label} Highlights Gallery")
@@ -785,7 +877,12 @@ def render_gallery(gallery_df, data_root, gallery_type):
         st.warning(f"No {gallery_type} detections found.")
         return
 
+    dataset_count = gallery_df["dataset_id"].nunique() if "dataset_id" in gallery_df.columns else 0
     species_counts = gallery_df["CommonName"].value_counts()
+    st.caption(
+        f"Scope contains {len(gallery_df):,} detections across {dataset_count:,} dataset(s) "
+        f"and {len(species_counts):,} species."
+    )
     max_species = st.slider(
         "Species in gallery",
         min_value=1,
@@ -1739,33 +1836,19 @@ if not resolved_db_path.exists():
     st.stop()
 
 con = connect_database(resolved_db_path)
+platform_schema = has_platform_schema(con)
 
-if has_platform_schema(con):
-    datasets, df = load_platform_data(con)
+if platform_schema:
+    datasets = load_platform_datasets(con)
+    df = None
 else:
     datasets, df = load_legacy_data(con)
 
-if df.empty:
-    st.error("No detections found in database.")
-    st.stop()
-
-df["DateTime"] = pd.to_datetime(df["DateTime"])
-all_detections = df.copy()
 datasets = datasets.copy()
 datasets["_sort_key"] = datasets["dataset_id"].map(dataset_sort_key)
 datasets = datasets.sort_values("_sort_key").drop(columns=["_sort_key"])
 
 points = location_points(datasets)
-
-if view_mode == "Bird highlights":
-    detector_values = all_detections["Detector"].fillna("birdnet").astype(str).str.lower()
-    render_gallery(all_detections[detector_values == "birdnet"], data_root, "birdnet")
-    st.stop()
-
-if view_mode == "Bat highlights":
-    detector_values = all_detections["Detector"].fillna("birdnet").astype(str).str.lower()
-    render_gallery(all_detections[detector_values == "batdetect2"], data_root, "batdetect2")
-    st.stop()
 
 dataset_labels = {}
 for _, row in datasets.iterrows():
@@ -1777,6 +1860,32 @@ for _, row in datasets.iterrows():
 selected_dataset_label = st.sidebar.selectbox("Dataset", list(dataset_labels.keys()))
 selected_dataset_id = dataset_labels[selected_dataset_label]
 
+if view_mode == "Bird highlights":
+    selected_dataset_ids = render_highlight_scope_selector(datasets, dataset_labels, selected_dataset_id, "birdnet")
+    if selected_dataset_ids is not None:
+        if platform_schema:
+            scoped = load_platform_detections(con, detector="birdnet", dataset_ids=selected_dataset_ids)
+        else:
+            detector_values = df["Detector"].fillna("birdnet").astype(str).str.lower()
+            scoped = df[(detector_values == "birdnet") & df["dataset_id"].isin(selected_dataset_ids)]
+        if not scoped.empty:
+            scoped["DateTime"] = pd.to_datetime(scoped["DateTime"])
+        render_gallery(scoped, data_root, "birdnet")
+    st.stop()
+
+if view_mode == "Bat highlights":
+    selected_dataset_ids = render_highlight_scope_selector(datasets, dataset_labels, selected_dataset_id, "batdetect2")
+    if selected_dataset_ids is not None:
+        if platform_schema:
+            scoped = load_platform_detections(con, detector="batdetect2", dataset_ids=selected_dataset_ids)
+        else:
+            detector_values = df["Detector"].fillna("birdnet").astype(str).str.lower()
+            scoped = df[(detector_values == "batdetect2") & df["dataset_id"].isin(selected_dataset_ids)]
+        if not scoped.empty:
+            scoped["DateTime"] = pd.to_datetime(scoped["DateTime"])
+        render_gallery(scoped, data_root, "batdetect2")
+    st.stop()
+
 with st.sidebar:
     if not points.empty:
         st.subheader("Locations")
@@ -1785,7 +1894,16 @@ with st.sidebar:
     else:
         st.caption("No dataset coordinates saved yet.")
 
-df = df[df["dataset_id"] == selected_dataset_id].copy()
+if platform_schema:
+    df = load_platform_detections(con, dataset_ids=[selected_dataset_id])
+else:
+    df = df[df["dataset_id"] == selected_dataset_id].copy()
+
+if df.empty:
+    st.error("No detections found for the selected dataset.")
+    st.stop()
+
+df["DateTime"] = pd.to_datetime(df["DateTime"])
 dataset_row = datasets[datasets["dataset_id"] == selected_dataset_id].iloc[0]
 
 start_time = df["DateTime"].min()
