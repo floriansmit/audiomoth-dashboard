@@ -459,6 +459,42 @@ def insert_df(con, table_name, df):
     con.unregister(temp_name)
 
 
+def insert_missing_df(con, table_name, df, key_column):
+    if df.empty:
+        return
+    temp_name = f"temp_{table_name}"
+    con.register(temp_name, df)
+    columns = ", ".join(f'"{column}"' for column in df.columns)
+    select_columns = ", ".join(f't."{column}"' for column in df.columns)
+    con.execute(
+        f"""
+        INSERT INTO {table_name} ({columns})
+        SELECT {select_columns}
+        FROM {temp_name} t
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM {table_name} existing
+            WHERE existing."{key_column}" = t."{key_column}"
+        )
+        """
+    )
+    con.unregister(temp_name)
+
+
+def upsert_dataset(con, dataset):
+    dataset_df = pd.DataFrame([dataset])
+    con.register("temp_dataset_upsert", dataset_df)
+    con.execute(
+        """
+        DELETE FROM datasets
+        WHERE dataset_id IN (SELECT dataset_id FROM temp_dataset_upsert)
+        """
+    )
+    columns = ", ".join(f'"{column}"' for column in dataset_df.columns)
+    con.execute(f"INSERT INTO datasets ({columns}) SELECT {columns} FROM temp_dataset_upsert")
+    con.unregister("temp_dataset_upsert")
+
+
 def compute_missing_audio_metrics(con, data_root, refresh=False, limit=None):
     if refresh:
         con.execute("DELETE FROM detection_audio_metrics")
@@ -593,9 +629,14 @@ def main():
         for _, manifest_row in manifest.iterrows():
             dataset, recordings_df, detections_df, skipped = import_dataset(manifest_row, data_root)
 
-            insert_df(con, "datasets", pd.DataFrame([dataset]))
-            insert_df(con, "recordings", recordings_df)
-            insert_df(con, "detections", detections_df)
+            if args.append:
+                upsert_dataset(con, dataset)
+                insert_missing_df(con, "recordings", recordings_df, "recording_id")
+                insert_missing_df(con, "detections", detections_df, "detection_id")
+            else:
+                insert_df(con, "datasets", pd.DataFrame([dataset]))
+                insert_df(con, "recordings", recordings_df)
+                insert_df(con, "detections", detections_df)
 
             print(
                 f"Imported {dataset['dataset_id']}: "
