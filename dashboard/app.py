@@ -268,6 +268,15 @@ def inject_design_system():
             .stApp {
                 background: #f5f7fb;
             }
+            header[data-testid="stHeader"] {
+                height: 0;
+                background: transparent;
+            }
+            div[data-testid="stToolbar"],
+            div[data-testid="stDecoration"],
+            div[data-testid="stStatusWidget"] {
+                display: none;
+            }
             section[data-testid="stSidebar"] {
                 background: #eef2f7;
                 border-right: 1px solid rgba(16, 24, 40, 0.08);
@@ -2610,7 +2619,7 @@ species_counts = df["CommonName"].value_counts().reset_index()
 species_counts.columns = ["Common Name", "Count"]
 species_counts = species_counts.sort_values("Count", ascending=False)
 
-st.title("Dashboard")
+st.title(APP_TITLE)
 overview_tab, histogram_tab, matrix_tab, species_tab, temporal_tab, inspector_tab = st.tabs(
     [
         "Overview",
@@ -2642,7 +2651,11 @@ with overview_tab:
         st.subheader("Location")
         map_style = st.radio("Map style", ["Satellite", "Standard"], horizontal=True, key="overview_map_style")
         if map_style == "Satellite":
-            st.plotly_chart(satellite_map_figure(selected_points), use_container_width=True)
+            st.plotly_chart(
+                satellite_map_figure(selected_points),
+                use_container_width=True,
+                config={"scrollZoom": True, "displaylogo": False},
+            )
         else:
             selected_deck = map_deck(
                 selected_points,
