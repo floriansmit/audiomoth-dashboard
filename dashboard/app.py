@@ -1,12 +1,15 @@
 import os
 import html
+import json
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import math
+import queue
 import re
+import threading
 import time
 from datetime import date, datetime
 from pathlib import Path
@@ -1132,8 +1135,134 @@ def audio_has_direct_outputs(audio_path, output_dir, suffixes):
     return any((output_dir / f"{audio_path.name}{suffix}").exists() for suffix in suffixes)
 
 
+def parse_birda_event(line):
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(event, dict):
+        return None
+    event_name = event.get("event") or event.get("type")
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else event
+    return event_name, payload
+
+
+def update_birda_progress(event_name, payload, state):
+    if not event_name:
+        return False
+
+    file_payload = payload.get("file") if isinstance(payload.get("file"), dict) else {}
+    file_name = (
+        file_payload.get("path")
+        or file_payload.get("file")
+        or payload.get("file")
+        or payload.get("path")
+        or payload.get("input")
+        or payload.get("filename")
+        or state.get("current_file")
+    )
+    if file_name:
+        state["current_file"] = Path(str(file_name)).name
+
+    total_files = payload.get("total_files") or payload.get("file_count") or payload.get("total")
+    if total_files is not None:
+        state["total_files"] = int(total_files)
+
+    if event_name == "file_started" and payload.get("index") is not None:
+        state["current_index"] = int(payload["index"])
+        state["file_progress"] = 0.0
+
+    if event_name in {"file_completed", "file_complete", "file_finished"}:
+        completed_files = state.setdefault("completed_files", set())
+        completed_key = str(file_name) if file_name else f"file-{len(completed_files) + 1}"
+        completed_files.add(completed_key)
+        state["done_files"] = len(completed_files)
+        state["file_progress"] = 0.0
+
+    if event_name == "pipeline_completed":
+        processed = payload.get("files_processed", 0)
+        skipped = payload.get("files_skipped", 0)
+        state["done_files"] = int(processed) + int(skipped)
+        state["file_progress"] = 0.0
+
+    progress = payload.get("progress") or payload.get("fraction")
+    if progress is not None:
+        state["progress"] = float(progress)
+    elif file_payload:
+        percent = file_payload.get("percent")
+        if percent is not None:
+            state["file_progress"] = max(0.0, min(1.0, float(percent) / 100.0))
+
+    detections = payload.get("detections") or payload.get("detection_count")
+    if detections is not None:
+        state["detections"] = int(detections)
+    elif payload.get("total_detections") is not None:
+        state["detections"] = int(payload["total_detections"])
+
+    return event_name in {
+        "pipeline_started",
+        "file_started",
+        "progress",
+        "file_completed",
+        "file_complete",
+        "file_finished",
+        "pipeline_completed",
+        "result",
+    }
+
+
+def enqueue_stream_lines(stream, line_queue):
+    try:
+        for line in iter(stream.readline, ""):
+            line_queue.put(line)
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+
+def process_is_running(pid):
+    if pid is None:
+        return False
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return False
+        return str(pid) in result.stdout
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def remove_stale_birda_locks(output_dir):
+    removed = []
+    for lock_path in output_dir.glob("*.birda.lock"):
+        try:
+            lock_data = json.loads(lock_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not process_is_running(lock_data.get("pid")):
+            lock_path.unlink()
+            removed.append(lock_path.name)
+    return removed
+
+
 def run_monitored_command(command, cwd, label, audio_dir, output_dir, output_suffixes):
     audio_list = audio_files(audio_dir)
+    is_birda = any(Path(str(part)).name.lower().startswith("birda") for part in command[:2])
     direct_output_monitor = set(output_suffixes) == {".csv", ".json"}
     if direct_output_monitor:
         monitor_audio_list = [
@@ -1149,30 +1278,65 @@ def run_monitored_command(command, cwd, label, audio_dir, output_dir, output_suf
     status_box = st.empty()
     log_box = st.empty()
 
-    stdout_file = tempfile.NamedTemporaryFile("w+", encoding="utf-8", delete=False)
     stderr_file = tempfile.NamedTemporaryFile("w+", encoding="utf-8", delete=False)
-    stdout_path = Path(stdout_file.name)
     stderr_path = Path(stderr_file.name)
 
     started = time.time()
+    stdout_lines = []
+    birda_state = {"done_files": 0, "total_files": expected_new_outputs or total_files, "file_progress": 0.0}
+    line_queue = queue.Queue()
     try:
         process = subprocess.Popen(
             command,
             cwd=cwd,
             env=command_environment(),
-            stdout=stdout_file,
+            stdout=subprocess.PIPE,
             stderr=stderr_file,
             text=True,
+            bufsize=1,
         )
+        if process.stdout:
+            threading.Thread(target=enqueue_stream_lines, args=(process.stdout, line_queue), daemon=True).start()
 
         while process.poll() is None:
+            while True:
+                try:
+                    line = line_queue.get_nowait()
+                except queue.Empty:
+                    break
+                else:
+                    stdout_lines.append(line)
+                    parsed = parse_birda_event(line) if is_birda else None
+                    if parsed:
+                        update_birda_progress(parsed[0], parsed[1], birda_state)
+
             current_outputs = output_unit_count(output_dir, output_suffixes)
             new_outputs = max(0, current_outputs - initial_outputs)
             monitor_total = expected_new_outputs if expected_new_outputs else total_files
             done_files = min(new_outputs, monitor_total) if expected_new_outputs else min(current_outputs, total_files)
             elapsed = time.time() - started
 
-            if monitor_total:
+            if is_birda and birda_state.get("total_files"):
+                birda_total = int(birda_state.get("total_files") or monitor_total or 1)
+                birda_done = min(int(birda_state.get("done_files", 0)), birda_total)
+                fraction = float(
+                    birda_state.get(
+                        "progress",
+                        (birda_done + float(birda_state.get("file_progress", 0.0))) / birda_total,
+                    )
+                )
+                fraction = max(0.0, min(1.0, fraction))
+                current_name = birda_state.get("current_file") or (monitor_audio_list[0].name if monitor_audio_list else "unknown")
+                eta = None
+                if birda_done > 0:
+                    remaining = max(0, birda_total - birda_done)
+                    eta = remaining * (elapsed / birda_done)
+                progress_bar.progress(fraction, text=f"{label}: {birda_done}/{birda_total} files")
+                details = f"Current file: {current_name}\n\nElapsed: {format_seconds(elapsed)} | Remaining: {format_seconds(eta)}"
+                if birda_state.get("detections") is not None:
+                    details += f"\n\nDetections reported: {birda_state['detections']}"
+                status_box.info(details)
+            elif monitor_total:
                 fraction = min(1.0, done_files / monitor_total)
                 current_index = min(done_files, len(monitor_audio_list) - 1)
                 current_name = monitor_audio_list[current_index].name if monitor_audio_list else "unknown"
@@ -1196,10 +1360,14 @@ def run_monitored_command(command, cwd, label, audio_dir, output_dir, output_suf
             time.sleep(1.0)
 
         returncode = process.wait()
-        stdout_file.close()
+        while True:
+            try:
+                stdout_lines.append(line_queue.get_nowait())
+            except queue.Empty:
+                break
         stderr_file.close()
 
-        stdout = stdout_path.read_text(encoding="utf-8", errors="replace")
+        stdout = "".join(stdout_lines)
         stderr = stderr_path.read_text(encoding="utf-8", errors="replace")
 
         final_outputs = output_unit_count(output_dir, output_suffixes)
@@ -1219,11 +1387,10 @@ def run_monitored_command(command, cwd, label, audio_dir, output_dir, output_suf
         return returncode, stdout, stderr
     finally:
         try:
-            stdout_file.close()
             stderr_file.close()
         except Exception:
             pass
-        for path in (stdout_path, stderr_path):
+        for path in (stderr_path,):
             try:
                 path.unlink(missing_ok=True)
             except Exception:
@@ -1764,12 +1931,13 @@ def render_processing_page(data_root, db_path):
         birda_device = st.selectbox(
             "Device",
             ["Auto", "GPU", "TensorRT", "CPU"],
-            help="GPU uses CUDA. TensorRT is fastest when its DLLs are copied into the Birda installation folder.",
+            help="GPU uses CUDA. TensorRT is fastest when the TensorRT DLL folder is on PATH or copied beside birda.exe.",
         )
     with birda_cols[2]:
         birda_confidence = st.number_input("Birda minimum confidence", min_value=0.01, max_value=0.99, value=0.30, step=0.05)
     with birda_cols[3]:
         birda_batch_size = st.number_input("Birda batch size", min_value=1, max_value=512, value=256, step=8)
+    st.caption("Suggested batch sizes: CUDA/GPU 256, TensorRT 32, CPU 8. TensorRT can spend extra time compiling the first run for a new model or batch size.")
 
     birda_model = st.text_input(
         "Birda model",
@@ -1793,8 +1961,14 @@ def render_processing_page(data_root, db_path):
 
     if st.button("Run Birda"):
         birda_output_dir.mkdir(parents=True, exist_ok=True)
+        removed_locks = remove_stale_birda_locks(birda_output_dir)
+        if removed_locks:
+            st.info(f"Removed {len(removed_locks)} stale Birda lock file(s) before starting.")
         extra_args = without_managed_birda_args(split_command(birda_extra_args))
         command = split_command(birda_command) + [
+            "--output-mode",
+            "ndjson",
+            "--no-progress",
             "--output-dir",
             str(birda_output_dir),
             "--format",
