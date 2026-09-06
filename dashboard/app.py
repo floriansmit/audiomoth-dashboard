@@ -2479,34 +2479,39 @@ def render_processing_page(data_root, db_path):
 st.set_page_config(page_title=APP_TITLE, page_icon="🎙️", layout="wide")
 inject_design_system()
 
+db_path = os.environ.get("AUDIOMOTH_DB", str(DEFAULT_DB_PATH))
+raw_data_root = Path(os.environ.get("AUDIOMOTH_DATA_ROOT", str(PROJECT_ROOT)))
+data_root = normalize_data_root(raw_data_root)
+ensure_local_data_folders(data_root)
+resolved_db_path = resolve_db_path(db_path, data_root)
+
+if "view_mode" not in st.session_state:
+    st.session_state["view_mode"] = "Dashboard"
+view_mode = st.session_state["view_mode"]
+
 with st.sidebar:
     if LOGO_PATH.exists():
         st.image(str(LOGO_PATH), width=220)
     st.markdown(f"### {APP_TITLE}")
-    st.header("Data")
-    db_path = st.text_input(
-        "Database path",
-        value=os.environ.get("AUDIOMOTH_DB", str(DEFAULT_DB_PATH)),
-    )
-    raw_data_root = Path(
-        st.text_input(
-            "External data root",
-            value=os.environ.get("AUDIOMOTH_DATA_ROOT", str(PROJECT_ROOT)),
-        )
-    )
-    data_root = normalize_data_root(raw_data_root)
-    if raw_data_root.expanduser().resolve() != data_root:
-        st.caption(f"Using data root: {data_root}")
-    ensure_local_data_folders(data_root)
-    view_mode = st.radio("View", ["Dashboard", "Processing", "Bird highlights", "Bat highlights"])
+    st.header("Project")
+    if st.button("Create Project", use_container_width=True):
+        st.session_state["processing_dataset_folder"] = "Create new dataset"
+        st.session_state["view_mode"] = "Processing"
+        st.rerun()
 
-if view_mode == "Processing":
-    render_processing_page(data_root, db_path)
+if not resolved_db_path.exists() and view_mode != "Processing":
+    render_first_run_page(data_root, resolved_db_path)
     st.stop()
 
-resolved_db_path = resolve_db_path(db_path, data_root)
-if not resolved_db_path.exists():
-    render_first_run_page(data_root, resolved_db_path)
+if not resolved_db_path.exists() and view_mode == "Processing":
+    with st.sidebar:
+        st.header("Navigate")
+        for page_name in ["Dashboard", "Processing", "Bird highlights", "Bat highlights"]:
+            button_type = "primary" if st.session_state["view_mode"] == page_name else "secondary"
+            if st.button(page_name, use_container_width=True, type=button_type):
+                st.session_state["view_mode"] = page_name
+                st.rerun()
+    render_processing_page(data_root, db_path)
     st.stop()
 
 con = connect_database(resolved_db_path)
@@ -2531,8 +2536,26 @@ for _, row in datasets.iterrows():
         label = f"{label} ({row['dataset_id']})"
     dataset_labels[label] = row["dataset_id"]
 
-selected_dataset_label = st.sidebar.selectbox("Dataset", list(dataset_labels.keys()))
+selected_dataset_label = st.sidebar.selectbox("Selected project", list(dataset_labels.keys()))
 selected_dataset_id = dataset_labels[selected_dataset_label]
+
+with st.sidebar:
+    if st.button("Open Selected Project", use_container_width=True):
+        st.session_state["view_mode"] = "Dashboard"
+        st.rerun()
+
+    st.header("Navigate")
+    for page_name in ["Dashboard", "Processing", "Bird highlights", "Bat highlights"]:
+        button_type = "primary" if st.session_state["view_mode"] == page_name else "secondary"
+        if st.button(page_name, use_container_width=True, type=button_type):
+            st.session_state["view_mode"] = page_name
+            st.rerun()
+
+view_mode = st.session_state["view_mode"]
+
+if view_mode == "Processing":
+    render_processing_page(data_root, db_path)
+    st.stop()
 
 if view_mode == "Bird highlights":
     selected_dataset_ids = render_highlight_scope_selector(datasets, dataset_labels, selected_dataset_id, "birdnet")
@@ -2583,248 +2606,268 @@ dataset_row = datasets[datasets["dataset_id"] == selected_dataset_id].iloc[0]
 start_time = df["DateTime"].min()
 end_time = df["DateTime"].max()
 
-render_sticky_dashboard_header(
-    dataset_row.get("location_name") or dataset_row.get("dataset_id"),
-    f"{start_time:%d %b %Y} - {end_time:%d %b %Y}",
-    f"{len(df):,}",
-)
-
-selected_points = points[points["dataset_id"] == selected_dataset_id]
-if not selected_points.empty:
-    st.subheader("Location")
-    map_style = st.radio("Map style", ["Satellite", "Standard"], horizontal=True)
-    if map_style == "Satellite":
-        st.plotly_chart(satellite_map_figure(selected_points), use_container_width=True)
-    else:
-        selected_deck = map_deck(
-            selected_points,
-            selected_dataset_id=selected_dataset_id,
-            satellite=False,
-            zoom=12,
-        )
-        st.pydeck_chart(selected_deck, use_container_width=True)
-
 species_counts = df["CommonName"].value_counts().reset_index()
 species_counts.columns = ["Common Name", "Count"]
 species_counts = species_counts.sort_values("Count", ascending=False)
 
-st.header("1. Species Overview")
-
-col1, col2 = st.columns([1, 2])
-
-with col1:
-    st.dataframe(species_counts, hide_index=True, use_container_width=True)
-
-with col2:
-    fig = px.bar(
-        species_counts,
-        x="Count",
-        y="Common Name",
-        orientation="h",
-        log_x=True,
-        color="Common Name",
-        color_discrete_sequence=px.colors.sequential.Viridis_r,
-    )
-    fig.update_layout(showlegend=False, height=500)
-    fig.update_xaxes(
-        type="log",
-        tickvals=[1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000],
-        ticktext=["1", "2", "5", "10", "20", "50", "100", "200", "500", "1k", "2k", "5k", "10k"],
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-render_detection_count_note()
-
-st.header("2. Species Occurrence Matrix")
-
-auto_resolution = auto_time_resolution(start_time, end_time)
-matrix_resolution_options = ["Auto", "Hour", "Day", "Week"]
-matrix_resolution_choice = st.radio(
-    "Matrix time resolution",
-    matrix_resolution_options,
-    index=0,
-    horizontal=True,
-    help="Auto uses hourly bins for short datasets, daily bins for medium datasets, and weekly bins for longer deployments.",
+st.title("Dashboard")
+overview_tab, histogram_tab, matrix_tab, species_tab, temporal_tab, inspector_tab = st.tabs(
+    [
+        "Overview",
+        "Histogram",
+        "Matrix",
+        "Species",
+        "Temporal Pattern",
+        "Detection Inspector",
+    ]
 )
-matrix_resolution = auto_resolution if matrix_resolution_choice == "Auto" else matrix_resolution_choice
-matrix_settings = time_resolution_settings(matrix_resolution)
-st.caption(f"Matrix shows detections by {matrix_resolution.lower()}. Auto would use: {auto_resolution.lower()}.")
 
-matrix_df = add_time_bin(df, matrix_resolution)
-matrix_df["TimeLabel"] = matrix_df["TimeBin"].dt.strftime(matrix_settings["format"])
-occurrence_matrix = matrix_df.pivot_table(
-    index="CommonName",
-    columns="TimeLabel",
-    values="Confidence",
-    aggfunc="size",
-    fill_value=0,
-)
-occurrence_matrix = occurrence_matrix.loc[occurrence_matrix.sum(axis=1).sort_values(ascending=False).index]
-ordered_time_labels = matrix_df[["TimeBin", "TimeLabel"]].drop_duplicates().sort_values("TimeBin")["TimeLabel"].tolist()
-occurrence_matrix = occurrence_matrix.reindex(columns=ordered_time_labels, fill_value=0)
-
-matrix_height = max(420, min(1200, 26 * len(occurrence_matrix)))
-matrix_fig = px.imshow(
-    occurrence_matrix,
-    labels={"x": matrix_settings["label"], "y": "Species", "color": "Detections"},
-    color_continuous_scale=[
-        [0.0, "#e8edf4"],
-        [0.25, "#cfeaf2"],
-        [0.55, "#73c8df"],
-        [0.8, "#1c95c9"],
-        [1.0, "#06649b"],
-    ],
-    aspect="auto",
-    text_auto=len(occurrence_matrix.columns) <= 60,
-)
-matrix_fig.update_layout(
-    height=matrix_height,
-    margin=dict(l=10, r=10, t=20, b=10),
-    paper_bgcolor="rgba(255,255,255,0)",
-    plot_bgcolor="rgba(255,255,255,0)",
-)
-matrix_fig.update_traces(xgap=2, ygap=2)
-matrix_fig.update_xaxes(side="top")
-st.plotly_chart(matrix_fig, use_container_width=True)
-
-st.header("3. Species Selection")
-
+selected_points = points[points["dataset_id"] == selected_dataset_id]
 species_options = [f"{row['Common Name']} ({row['Count']})" for _, row in species_counts.iterrows()]
 species_lookup = {f"{row['Common Name']} ({row['Count']})": row["Common Name"] for _, row in species_counts.iterrows()}
 
-selected_display = st.selectbox("Select species", species_options)
-selected_species = species_lookup[selected_display]
+with overview_tab:
+    st.header("Project Overview")
+    metric_cols = st.columns(3)
+    with metric_cols[0]:
+        st.metric("Location", dataset_row.get("location_name") or dataset_row.get("dataset_id"))
+    with metric_cols[1]:
+        st.metric("Date range", f"{start_time:%d %b %Y} - {end_time:%d %b %Y}")
+    with metric_cols[2]:
+        st.metric("Total observations", f"{len(df):,}")
 
-species_df = df[df["CommonName"] == selected_species]
+    render_detection_count_note()
 
-if species_df.empty:
-    st.warning("No detections for this species.")
-    st.stop()
-
-with st.expander("Species profile", expanded=True):
-    profile_error = None
-    try:
-        profile = wikipedia_species_profile(selected_species)
-    except Exception as exc:
-        profile_error = exc
-        profile = None
-
-    if profile:
-        image_col, text_col, map_col = st.columns([1, 2, 1])
-        with image_col:
-            if profile["image_url"]:
-                st.image(profile["image_url"], use_container_width=True)
-        with text_col:
-            st.subheader(profile["title"])
-            if profile["extract"]:
-                st.write(profile["extract"])
-            if profile["page_url"]:
-                st.markdown(f"[Wikipedia]({profile['page_url']})")
-        with map_col:
-            if profile["range_map_url"]:
-                st.image(profile["range_map_url"], use_container_width=True)
-
-        details = profile.get("details", {})
-        if details:
-            detail_columns = st.columns(2)
-            for index, (heading, text) in enumerate(details.items()):
-                with detail_columns[index % 2]:
-                    st.markdown(f"**{heading}**")
-                    st.write(text)
-        if "Lifespan" not in details:
-            st.caption("Wikipedia does not provide specific lifespan information for this species.")
-    else:
-        if profile_error:
-            st.warning(f"Wikipedia lookup failed: {profile_error}")
+    if not selected_points.empty:
+        st.subheader("Location")
+        map_style = st.radio("Map style", ["Satellite", "Standard"], horizontal=True, key="overview_map_style")
+        if map_style == "Satellite":
+            st.plotly_chart(satellite_map_figure(selected_points), use_container_width=True)
         else:
-            st.info("No Wikipedia profile found for this selection.")
+            selected_deck = map_deck(
+                selected_points,
+                selected_dataset_id=selected_dataset_id,
+                satellite=False,
+                zoom=12,
+            )
+            st.pydeck_chart(selected_deck, use_container_width=True)
+    else:
+        st.info("No coordinates saved for this project yet.")
 
-st.header("4. Temporal Pattern")
+with histogram_tab:
+    st.header("Species Histogram")
+    col1, col2 = st.columns([1, 2])
 
-auto_temporal = auto_temporal_resolution(species_df["DateTime"].min(), species_df["DateTime"].max())
-temporal_resolution_options = ["Auto", "Minute", "Hour", "Day", "Week"]
-temporal_resolution_choice = st.radio(
-    "Temporal plot resolution",
-    temporal_resolution_options,
-    index=0,
-    horizontal=True,
-    help="Minute bins are useful for short recordings or single-night deployments. Longer spans are usually easier to read by hour, day, or week.",
-)
-temporal_resolution = auto_temporal if temporal_resolution_choice == "Auto" else temporal_resolution_choice
-temporal_settings = time_resolution_settings(temporal_resolution)
-st.caption(f"Temporal plot shows detections by {temporal_resolution.lower()}. Auto would use: {auto_temporal.lower()}.")
+    with col1:
+        st.dataframe(species_counts, hide_index=True, use_container_width=True)
 
-temporal_counts = complete_time_counts(species_df, temporal_resolution)
-temporal_title = {
-    "Minute": "Minute-by-minute",
-    "Hour": "Hourly",
-    "Day": "Daily",
-    "Week": "Weekly",
-}[temporal_resolution]
-fig2 = px.bar(
-    temporal_counts,
-    x="TimeBin",
-    y="Count",
-    title=f"{temporal_title} detections of {selected_species}",
-)
-fig2.update_layout(xaxis_title=temporal_settings["axis"], yaxis_title="Detections")
-st.plotly_chart(fig2, use_container_width=True)
+    with col2:
+        fig = px.bar(
+            species_counts,
+            x="Count",
+            y="Common Name",
+            orientation="h",
+            log_x=True,
+            color="Common Name",
+            color_discrete_sequence=px.colors.sequential.Viridis_r,
+        )
+        fig.update_layout(showlegend=False, height=500)
+        fig.update_xaxes(
+            type="log",
+            tickvals=[1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000],
+            ticktext=["1", "2", "5", "10", "20", "50", "100", "200", "500", "1k", "2k", "5k", "10k"],
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-st.header("5. Detection Inspector")
+with matrix_tab:
+    st.header("Species Occurrence Matrix")
 
-min_conf = float(species_df["Confidence"].min())
-max_conf = float(species_df["Confidence"].max())
-
-if min_conf < max_conf:
-    selected_conf = st.slider(
-        "Minimum confidence",
-        min_value=min_conf,
-        max_value=max_conf,
-        value=min_conf,
+    auto_resolution = auto_time_resolution(start_time, end_time)
+    matrix_resolution_options = ["Auto", "Hour", "Day", "Week"]
+    matrix_resolution_choice = st.radio(
+        "Matrix time resolution",
+        matrix_resolution_options,
+        index=0,
+        horizontal=True,
+        help="Auto uses hourly bins for short datasets, daily bins for medium datasets, and weekly bins for longer deployments.",
     )
-else:
-    selected_conf = min_conf
-    st.caption(f"Only one confidence value for this selection: {selected_conf:.4f}")
+    matrix_resolution = auto_resolution if matrix_resolution_choice == "Auto" else matrix_resolution_choice
+    matrix_settings = time_resolution_settings(matrix_resolution)
+    st.caption(f"Matrix shows detections by {matrix_resolution.lower()}. Auto would use: {auto_resolution.lower()}.")
 
-filtered_df = species_df[species_df["Confidence"] >= selected_conf].copy()
-filtered_df = filtered_df.sort_values("Confidence", ascending=False)
+    matrix_df = add_time_bin(df, matrix_resolution)
+    matrix_df["TimeLabel"] = matrix_df["TimeBin"].dt.strftime(matrix_settings["format"])
+    occurrence_matrix = matrix_df.pivot_table(
+        index="CommonName",
+        columns="TimeLabel",
+        values="Confidence",
+        aggfunc="size",
+        fill_value=0,
+    )
+    occurrence_matrix = occurrence_matrix.loc[occurrence_matrix.sum(axis=1).sort_values(ascending=False).index]
+    ordered_time_labels = matrix_df[["TimeBin", "TimeLabel"]].drop_duplicates().sort_values("TimeBin")["TimeLabel"].tolist()
+    occurrence_matrix = occurrence_matrix.reindex(columns=ordered_time_labels, fill_value=0)
 
-visible_columns = [
-    "DateTime",
-    "Detector",
-    "CommonName",
-    "Confidence",
-    "MeanDbfs",
-    "relative_audio_path",
-    "BeginTime",
-    "EndTime",
-    "SpeciesCode",
-]
-visible_columns = [column for column in visible_columns if column in filtered_df.columns]
+    matrix_height = max(420, min(1200, 26 * len(occurrence_matrix)))
+    matrix_fig = px.imshow(
+        occurrence_matrix,
+        labels={"x": matrix_settings["label"], "y": "Species", "color": "Detections"},
+        color_continuous_scale=[
+            [0.0, "#e8edf4"],
+            [0.25, "#cfeaf2"],
+            [0.55, "#73c8df"],
+            [0.8, "#1c95c9"],
+            [1.0, "#06649b"],
+        ],
+        aspect="auto",
+        text_auto=len(occurrence_matrix.columns) <= 60,
+    )
+    matrix_fig.update_layout(
+        height=matrix_height,
+        margin=dict(l=10, r=10, t=20, b=10),
+        paper_bgcolor="rgba(255,255,255,0)",
+        plot_bgcolor="rgba(255,255,255,0)",
+    )
+    matrix_fig.update_traces(xgap=2, ygap=2)
+    matrix_fig.update_xaxes(side="top")
+    st.plotly_chart(matrix_fig, use_container_width=True)
 
-st.dataframe(filtered_df[visible_columns], use_container_width=True)
+with species_tab:
+    st.header("Species Selection")
 
-if filtered_df.empty:
-    st.warning("No detections match the selected filters.")
-    st.stop()
+    selected_display = st.selectbox("Select species", species_options)
+    selected_species = species_lookup[selected_display]
 
-filtered_df["Display"] = (
-    filtered_df.index.astype(str)
-    + " | "
-    + selected_species
-    + " | "
-    + filtered_df["Confidence"].round(3).astype(str)
-)
+    species_df = df[df["CommonName"] == selected_species]
 
-selected_detection = st.selectbox("Select detection", filtered_df["Display"])
-selected_index = int(selected_detection.split(" | ")[0])
-row = filtered_df.loc[selected_index]
-inspector_kind = str(row.get("Detector") or "birdnet").lower()
-if str(row.get("dataset_type") or "").lower() == "bats":
-    inspector_kind = "bats"
-render_audio_inspector(
-    row,
-    data_root,
-    inspector_kind,
-    key_prefix=f"inspector_{selected_index}",
-)
+    if species_df.empty:
+        st.warning("No detections for this species.")
+    else:
+        with st.expander("Species profile", expanded=True):
+            profile_error = None
+            try:
+                profile = wikipedia_species_profile(selected_species)
+            except Exception as exc:
+                profile_error = exc
+                profile = None
+
+            if profile:
+                image_col, text_col, map_col = st.columns([1, 2, 1])
+                with image_col:
+                    if profile["image_url"]:
+                        st.image(profile["image_url"], use_container_width=True)
+                with text_col:
+                    st.subheader(profile["title"])
+                    if profile["extract"]:
+                        st.write(profile["extract"])
+                    if profile["page_url"]:
+                        st.markdown(f"[Wikipedia]({profile['page_url']})")
+                with map_col:
+                    if profile["range_map_url"]:
+                        st.image(profile["range_map_url"], use_container_width=True)
+
+                details = profile.get("details", {})
+                if details:
+                    detail_columns = st.columns(2)
+                    for index, (heading, text) in enumerate(details.items()):
+                        with detail_columns[index % 2]:
+                            st.markdown(f"**{heading}**")
+                            st.write(text)
+                if "Lifespan" not in details:
+                    st.caption("Wikipedia does not provide specific lifespan information for this species.")
+            else:
+                if profile_error:
+                    st.warning(f"Wikipedia lookup failed: {profile_error}")
+                else:
+                    st.info("No Wikipedia profile found for this selection.")
+
+with temporal_tab:
+    st.header("Temporal Pattern")
+
+    auto_temporal = auto_temporal_resolution(species_df["DateTime"].min(), species_df["DateTime"].max())
+    temporal_resolution_options = ["Auto", "Minute", "Hour", "Day", "Week"]
+    temporal_resolution_choice = st.radio(
+        "Temporal plot resolution",
+        temporal_resolution_options,
+        index=0,
+        horizontal=True,
+        help="Minute bins are useful for short recordings or single-night deployments. Longer spans are usually easier to read by hour, day, or week.",
+    )
+    temporal_resolution = auto_temporal if temporal_resolution_choice == "Auto" else temporal_resolution_choice
+    temporal_settings = time_resolution_settings(temporal_resolution)
+    st.caption(f"Temporal plot shows detections by {temporal_resolution.lower()}. Auto would use: {auto_temporal.lower()}.")
+
+    temporal_counts = complete_time_counts(species_df, temporal_resolution)
+    temporal_title = {
+        "Minute": "Minute-by-minute",
+        "Hour": "Hourly",
+        "Day": "Daily",
+        "Week": "Weekly",
+    }[temporal_resolution]
+    fig = px.bar(
+        temporal_counts,
+        x="TimeBin",
+        y="Count",
+        title=f"{temporal_title} detections of {selected_species}",
+    )
+    fig.update_layout(xaxis_title=temporal_settings["axis"], yaxis_title="Detections")
+    st.plotly_chart(fig, use_container_width=True)
+
+with inspector_tab:
+    st.header("Detection Inspector")
+
+    min_conf = float(species_df["Confidence"].min())
+    max_conf = float(species_df["Confidence"].max())
+
+    if min_conf < max_conf:
+        selected_conf = st.slider(
+            "Minimum confidence",
+            min_value=min_conf,
+            max_value=max_conf,
+            value=min_conf,
+        )
+    else:
+        selected_conf = min_conf
+        st.caption(f"Only one confidence value for this selection: {selected_conf:.4f}")
+
+    filtered_df = species_df[species_df["Confidence"] >= selected_conf].copy()
+    filtered_df = filtered_df.sort_values("Confidence", ascending=False)
+
+    visible_columns = [
+        "DateTime",
+        "Detector",
+        "CommonName",
+        "Confidence",
+        "MeanDbfs",
+        "relative_audio_path",
+        "BeginTime",
+        "EndTime",
+        "SpeciesCode",
+    ]
+    visible_columns = [column for column in visible_columns if column in filtered_df.columns]
+
+    st.dataframe(filtered_df[visible_columns], use_container_width=True)
+
+    if filtered_df.empty:
+        st.warning("No detections match the selected filters.")
+    else:
+        filtered_df["Display"] = (
+            filtered_df.index.astype(str)
+            + " | "
+            + selected_species
+            + " | "
+            + filtered_df["Confidence"].round(3).astype(str)
+        )
+
+        selected_detection = st.selectbox("Select detection", filtered_df["Display"])
+        selected_index = int(selected_detection.split(" | ")[0])
+        row = filtered_df.loc[selected_index]
+        inspector_kind = str(row.get("Detector") or "birdnet").lower()
+        if str(row.get("dataset_type") or "").lower() == "bats":
+            inspector_kind = "bats"
+        render_audio_inspector(
+            row,
+            data_root,
+            inspector_kind,
+            key_prefix=f"inspector_{selected_index}",
+        )
