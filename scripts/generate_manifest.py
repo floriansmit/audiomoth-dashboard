@@ -14,6 +14,7 @@ MANIFEST_COLUMNS = [
     "period_label",
     "birdnet_dir",
     "batdetect2_dir",
+    "birda_dir",
     "audio_dir",
 ]
 
@@ -134,7 +135,11 @@ def find_birdnet_dir(dataset_dir):
     if scored:
         return max(scored, key=lambda item: item[0])[1]
 
-    return dataset_dir
+    root_tables = [path for path in dataset_dir.iterdir() if path.is_file() and is_birdnet_table(path)]
+    if root_tables:
+        return dataset_dir
+
+    return None
 
 
 def find_batdetect2_dir(dataset_dir):
@@ -146,6 +151,20 @@ def find_batdetect2_dir(dataset_dir):
 
     for child in child_dirs:
         if "batdetect" in child.name.lower():
+            return child
+
+    return None
+
+
+def find_birda_dir(dataset_dir):
+    child_dirs = [path for path in dataset_dir.iterdir() if path.is_dir()]
+
+    for child in child_dirs:
+        if child.name.lower() == "birda":
+            return child
+
+    for child in child_dirs:
+        if "birda" in child.name.lower():
             return child
 
     return None
@@ -188,6 +207,7 @@ def build_manifest_rows(data_root, datasets_dir, existing_rows):
         audio_dir = find_audio_dir(dataset_dir)
         birdnet_dir = find_birdnet_dir(dataset_dir)
         batdetect2_dir = find_batdetect2_dir(dataset_dir)
+        birda_dir = find_birda_dir(dataset_dir)
 
         if birdnet_dir and batdetect2_dir:
             bird_dataset_id, bat_dataset_id = split_dataset_ids(base_dataset_id)
@@ -201,6 +221,7 @@ def build_manifest_rows(data_root, datasets_dir, existing_rows):
                     "period_label": period_label_from_audio(audio_dir),
                     "birdnet_dir": relative_path(birdnet_dir, data_root),
                     "batdetect2_dir": "",
+                    "birda_dir": relative_path(birda_dir, data_root) if birda_dir else "",
                     "audio_dir": relative_path(audio_dir, data_root),
                 },
                 {
@@ -212,6 +233,7 @@ def build_manifest_rows(data_root, datasets_dir, existing_rows):
                     "period_label": period_label_from_audio(audio_dir),
                     "birdnet_dir": "",
                     "batdetect2_dir": relative_path(batdetect2_dir, data_root),
+                    "birda_dir": relative_path(birda_dir, data_root) if birda_dir else "",
                     "audio_dir": relative_path(audio_dir, data_root),
                 },
             ]
@@ -223,8 +245,9 @@ def build_manifest_rows(data_root, datasets_dir, existing_rows):
             "latitude": "",
             "longitude": "",
             "period_label": period_label_from_audio(audio_dir),
-            "birdnet_dir": relative_path(birdnet_dir, data_root),
+            "birdnet_dir": relative_path(birdnet_dir, data_root) if birdnet_dir else "",
             "batdetect2_dir": relative_path(batdetect2_dir, data_root) if batdetect2_dir else "",
+            "birda_dir": relative_path(birda_dir, data_root) if birda_dir else "",
             "audio_dir": relative_path(audio_dir, data_root),
             }]
 
@@ -270,7 +293,7 @@ def main():
     for row in rows:
         print(
             f"- {row['dataset_id']}: birdnet={row['birdnet_dir']} "
-            f"batdetect2={row['batdetect2_dir']} audio={row['audio_dir']}"
+            f"batdetect2={row['batdetect2_dir']} birda={row['birda_dir']} audio={row['audio_dir']}"
         )
     print("Manual fields preserved when dataset_id matched: dataset_type, location_name, latitude, longitude")
 

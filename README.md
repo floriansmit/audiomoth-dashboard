@@ -1,6 +1,6 @@
 # AudioMoth Dashboard
 
-AudioMoth Dashboard is a local Streamlit app for exploring AudioMoth recordings with BirdNET Analyzer and BatDetect2 results. It can copy audio into dataset folders, run analyzers, generate a dataset manifest, build a DuckDB database, and browse detections with maps, species summaries, galleries, audio playback, and spectrograms.
+AudioMoth Dashboard is a local Streamlit app for exploring AudioMoth recordings with Birda, BirdNET Analyzer, and BatDetect2 results. It can copy audio into dataset folders, run analyzers, generate a dataset manifest, build a DuckDB database, and browse detections with maps, species summaries, galleries, audio playback, and spectrograms.
 
 The app is designed for local field-recording projects. Audio files, analyzer outputs, manifests, and DuckDB databases are ignored by Git by default.
 
@@ -13,9 +13,9 @@ The app is designed for local field-recording projects. Audio files, analyzer ou
 ## Features
 
 - Organize recordings into repeatable dataset folders.
-- Run BirdNET Analyzer from the Processing page.
-- Run BatDetect2 from the Processing page.
-- Store BirdNET and BatDetect2 outputs separately.
+- Run Birda, BirdNET Analyzer, or BatDetect2 from the Processing page.
+- Use Birda as the recommended high-performance backend when its CUDA build is installed.
+- Store Birda, BirdNET, and BatDetect2 outputs separately.
 - Build or update a DuckDB database from a manifest.
 - Browse detections by dataset, species, date, hour, confidence, and detector.
 - Show species notes and media from Wikipedia when available.
@@ -52,6 +52,7 @@ datasets/
   audiomoth.duckdb
   01_example_location/
     audio/
+    birda/
     birdnet/
     batdetect2_outputs/
 ```
@@ -111,7 +112,7 @@ On a clean clone, the app creates `datasets/` automatically. The dashboard view 
 
 1. Create or select a dataset folder.
 2. Copy or place audio files in that dataset's `audio/` folder.
-3. Run BirdNET Analyzer and/or BatDetect2.
+3. Run Birda, BirdNET Analyzer, and/or BatDetect2.
 4. Press `Regenerate manifest`.
 5. Press `Append to database` for a new dataset.
 6. Use `Rebuild listed datasets` if you re-ran analyzer outputs for an existing dataset.
@@ -127,13 +128,15 @@ datasets/
   01_site_name/
     audio/
       20230701_221500.WAV
+    birda/
+      20230701_221500.BirdNET.results.csv
     birdnet/
       20230701_221500.BirdNET.selection.table.txt
     batdetect2_outputs/
       20230701_221500.WAV.csv
 ```
 
-BirdNET output should stay in `birdnet/`. BatDetect2 output should stay in `batdetect2_outputs/`. This keeps bird and bat detector provenance explicit in the database.
+Birda output should stay in `birda/`. BirdNET Analyzer output should stay in `birdnet/`. BatDetect2 output should stay in `batdetect2_outputs/`. This keeps detector provenance explicit in the database.
 
 See [docs/data-structure.md](docs/data-structure.md) for more detail.
 
@@ -181,6 +184,8 @@ By default, the BatDetect2 helper skips audio files that already have matching `
 python scripts\run_batdetect2.py --audio-dir "datasets\01_site_name\audio" --rerun-existing
 ```
 
+Birda is an optional external binary rather than a Python package in `requirements.txt`. For best performance on Windows/NVIDIA systems, install the Birda CUDA release from [tphakala/birda](https://github.com/tphakala/birda), add `birda.exe` to PATH, then restart the dashboard. The Processing page can then run Birda with GPU, batch-size, BirdNET/Perch model, and BattyBirdNET region settings.
+
 ## Public Repository Notes
 
 Do not commit real field recordings, generated analyzer outputs, or DuckDB databases unless you explicitly intend to publish those data. The included `.gitignore` keeps these local by default.
@@ -193,6 +198,7 @@ AudioMoth Dashboard uses external bioacoustic tools through their published Pyth
 
 - [BirdNET Analyzer](https://github.com/birdnet-team/BirdNET-Analyzer) for bird and wildlife sound classification.
 - [BatDetect2](https://github.com/macaodha/batdetect2) for detecting and classifying bat echolocation calls.
+- [Birda](https://github.com/tphakala/birda) as an optional high-performance CLI backend for BirdNET, Perch, and BattyBirdNET models.
 
 These projects are installed as dependencies from `requirements.txt` and are called by the dashboard during processing. This repository does not vendor, redistribute, or modify their source code. Please refer to the respective projects for their documentation, licenses, citation guidance, and model details.
 

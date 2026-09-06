@@ -1,3 +1,3 @@
-dataset_id,dataset_type,location_name,latitude,longitude,period_label,birdnet_dir,batdetect2_dir,audio_dir
-kasmu_autumn_2024,birds,Kasmu,59.6069,25.9136,Autumn 2024,datasets/kasmu_autumn_2024/birdnet,,datasets/kasmu_autumn_2024/audio
-example_bat_project,bats,Example location,55.0000,12.0000,Spring 2025,datasets/example_bat_project/birdnet_birdfreq,datasets/example_bat_project/batdetect2_outputs,datasets/example_bat_project/audio
+dataset_id,dataset_type,location_name,latitude,longitude,period_label,birdnet_dir,batdetect2_dir,birda_dir,audio_dir
+kasmu_autumn_2024,birds,Kasmu,59.6069,25.9136,Autumn 2024,datasets/kasmu_autumn_2024/birdnet,,datasets/kasmu_autumn_2024/birda,datasets/kasmu_autumn_2024/audio
+example_bat_project,bats,Example location,55.0000,12.0000,Spring 2025,datasets/example_bat_project/birdnet_birdfreq,datasets/example_bat_project/batdetect2_outputs,datasets/example_bat_project/birda,datasets/example_bat_project/audio

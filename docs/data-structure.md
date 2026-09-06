@@ -10,6 +10,7 @@ datasets/
   audiomoth.duckdb
   01_site_name/
     audio/
+    birda/
     birdnet/
     batdetect2_outputs/
 ```
@@ -17,6 +18,7 @@ datasets/
 Folder purpose:
 
 - `audio/`: original WAV, FLAC, or MP3 recordings.
+- `birda/`: Birda CSV outputs.
 - `birdnet/`: BirdNET Analyzer selection-table outputs.
 - `batdetect2_outputs/`: BatDetect2 CSV outputs.
 - `datasets_manifest.csv`: generated dataset manifest.
@@ -31,6 +33,16 @@ Selection  View  Channel  Begin Time (s)  End Time (s)  Low Freq (Hz)  High Freq
 ```
 
 The original BirdNET files do not need audio paths. `scripts/build_db.py` links each table to the matching audio file by filename or timestamp.
+
+## Birda Output
+
+Birda outputs should stay in `birda/`. The builder imports Birda CSV files with columns like:
+
+```text
+Start (s)  End (s)  Scientific name  Common name  Confidence  File
+```
+
+Birda is the recommended backend when performance matters because its Windows CUDA build can use NVIDIA GPUs and it skips existing outputs unless `--force` is used. Install Birda separately from [tphakala/birda](https://github.com/tphakala/birda), then use the Processing page to run it.
 
 ## BatDetect2 Output
 
@@ -56,6 +68,7 @@ The manifest includes:
 - `period_label`
 - `birdnet_dir`
 - `batdetect2_dir`
+- `birda_dir`
 - `audio_dir`
 
 `location_name`, `latitude`, and `longitude` can be edited from the Processing page. Existing manual values are preserved when regenerating the manifest and the `dataset_id` still matches.

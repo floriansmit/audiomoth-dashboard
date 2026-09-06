@@ -22,6 +22,13 @@ BIRDNET_SUFFIXES = (
     ".selection.table.csv",
 )
 BATDETECT2_SUFFIXES = (".WAV.csv", ".wav.csv", ".WAV.json", ".wav.json")
+BIRDA_SUFFIXES = (
+    ".BirdNET.results.csv",
+    ".BirdNET.csv",
+    ".Perch.results.csv",
+    ".Perch.csv",
+    ".csv",
+)
 METRIC_PADDING_SECONDS = 3.0
 
 
@@ -45,6 +52,13 @@ def strip_birdnet_suffix(filename):
 
 def strip_batdetect2_suffix(filename):
     for suffix in BATDETECT2_SUFFIXES:
+        if filename.endswith(suffix):
+            return filename[: -len(suffix)]
+    return Path(filename).stem
+
+
+def strip_birda_suffix(filename):
+    for suffix in BIRDA_SUFFIXES:
         if filename.endswith(suffix):
             return filename[: -len(suffix)]
     return Path(filename).stem
@@ -189,6 +203,57 @@ def normalise_batdetect2_json(path):
     return normalise_batdetect2_csv(pd.DataFrame(annotations).rename(columns={"start_time": "start_time"}))
 
 
+def normalise_birda_csv(df):
+    required = {"Start (s)", "End (s)", "Common name", "Confidence"}
+    missing = required - set(df.columns)
+    if missing:
+        return pd.DataFrame()
+
+    result = pd.DataFrame(
+        {
+            "CommonName": df["Common name"].astype(str),
+            "Confidence": pd.to_numeric(df["Confidence"], errors="coerce"),
+            "BeginTime": pd.to_numeric(df["Start (s)"], errors="coerce"),
+            "EndTime": pd.to_numeric(df["End (s)"], errors="coerce"),
+            "SpeciesCode": df.get("Scientific name", df["Common name"]).map(species_code),
+            "LowFreqHz": np.nan,
+            "HighFreqHz": np.nan,
+        }
+    )
+    return result.dropna(subset=["Confidence", "BeginTime", "EndTime"])
+
+
+def infer_birda_audio_path(table_path, raw_df, audio_index):
+    if "File" in raw_df.columns:
+        values = raw_df["File"].dropna().astype(str)
+        values = values[values.str.strip() != ""]
+        if not values.empty:
+            file_path = Path(values.iloc[0])
+            keys = [file_path.name.lower(), file_path.stem.lower()]
+            for key in keys:
+                if key in audio_index:
+                    return audio_index[key]
+            timestamp = parse_recording_datetime(file_path.name)
+            if timestamp is not None:
+                key = timestamp.strftime("%Y%m%d_%H%M%S").lower()
+                if key in audio_index:
+                    return audio_index[key]
+            return file_path.name
+
+    base_name = strip_birda_suffix(table_path.name)
+    for key in (base_name.lower(), Path(base_name).stem.lower()):
+        if key in audio_index:
+            return audio_index[key]
+
+    timestamp = parse_recording_datetime(base_name)
+    if timestamp is not None:
+        key = timestamp.strftime("%Y%m%d_%H%M%S").lower()
+        if key in audio_index:
+            return audio_index[key]
+
+    return f"UNMATCHED/{base_name}.WAV"
+
+
 def detection_id(dataset_id, recording_id, detector, row):
     raw = "|".join(
         [
@@ -235,6 +300,7 @@ def create_schema(con):
             period_label TEXT,
             birdnet_dir TEXT,
             batdetect2_dir TEXT,
+            birda_dir TEXT,
             audio_dir TEXT
         )
         """
@@ -244,6 +310,8 @@ def create_schema(con):
         con.execute("ALTER TABLE datasets RENAME COLUMN dataset_name TO dataset_type")
     if "batdetect2_dir" not in dataset_columns:
         con.execute("ALTER TABLE datasets ADD COLUMN batdetect2_dir TEXT")
+    if "birda_dir" not in dataset_columns:
+        con.execute("ALTER TABLE datasets ADD COLUMN birda_dir TEXT")
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS recordings (
@@ -343,6 +411,17 @@ def detector_sources(row, data_root, dataset_dir):
     if batdetect2_dir and batdetect2_dir.exists():
         sources.append({"detector": "batdetect2", "path": batdetect2_dir})
 
+    birda_value = path_value(row, "birda_dir")
+    birda_dir = None
+    if birda_value:
+        birda_dir = (data_root / birda_value).resolve()
+    else:
+        fallback_birda_dir = dataset_dir / "birda"
+        if fallback_birda_dir.exists():
+            birda_dir = fallback_birda_dir
+    if birda_dir and birda_dir.exists():
+        sources.append({"detector": "birda", "path": birda_dir})
+
     return sources
 
 
@@ -365,6 +444,8 @@ def import_dataset(row, data_root):
         source_dir = source["path"]
         if detector == "birdnet":
             source_files = sorted(source_dir.rglob("*.txt")) + sorted(source_dir.rglob("*.csv"))
+        elif detector == "batdetect2":
+            source_files = sorted(source_dir.rglob("*.csv"))
         else:
             source_files = sorted(source_dir.rglob("*.csv"))
 
@@ -378,12 +459,15 @@ def import_dataset(row, data_root):
             if detector == "birdnet":
                 df = normalise_detections(raw_df)
                 rel_audio_path = infer_audio_path(table_path, raw_df, audio_index)
-            else:
+            elif detector == "batdetect2":
                 df = normalise_batdetect2_csv(raw_df)
                 audio_key = batdetect_audio_key(table_path)
                 rel_audio_path = audio_index.get(audio_key.lower()) or audio_index.get(Path(audio_key).stem.lower())
                 if rel_audio_path is None:
                     rel_audio_path = f"UNMATCHED/{audio_key}"
+            else:
+                df = normalise_birda_csv(raw_df)
+                rel_audio_path = infer_birda_audio_path(table_path, raw_df, audio_index)
 
             if df.empty:
                 skipped.append((str(table_path), f"no valid {detector} detections"))
@@ -441,6 +525,7 @@ def import_dataset(row, data_root):
         "period_label": row.get("period_label", ""),
         "birdnet_dir": path_value(row, "birdnet_dir") or "",
         "batdetect2_dir": path_value(row, "batdetect2_dir") or "",
+        "birda_dir": path_value(row, "birda_dir") or "",
         "audio_dir": str(row["audio_dir"]),
     }
 

@@ -141,10 +141,11 @@ def load_platform_detections(con, detector=None, dataset_ids=None):
     detector_filter_sql = ""
     params = []
     if detector:
+        detectors = [str(item).lower() for item in detector] if isinstance(detector, (list, tuple, set)) else [str(detector).lower()]
         if "Detector" in detection_columns:
-            detector_filter_sql = "AND lower(COALESCE(d.Detector, 'birdnet')) = ?"
-            params.append(str(detector).lower())
-        elif str(detector).lower() != "birdnet":
+            con.register("selected_detection_detectors", pd.DataFrame({"detector": detectors}))
+            detector_filter_sql = "AND lower(COALESCE(d.Detector, 'birdnet')) IN (SELECT detector FROM selected_detection_detectors)"
+        elif "birdnet" not in detectors:
             detector_filter_sql = "AND 1 = 0"
 
     dataset_filter_sql = ""
@@ -191,6 +192,8 @@ def load_platform_detections(con, detector=None, dataset_ids=None):
             params,
         ).df()
     finally:
+        if detector and "Detector" in detection_columns:
+            con.unregister("selected_detection_detectors")
         if dataset_ids is not None:
             con.unregister("selected_detection_datasets")
 
@@ -242,6 +245,51 @@ def metric_box(label, value):
             <div style="font-size: 0.78rem; color: #5f6368; margin-bottom: 0.25rem;">{label}</div>
             <div style="font-size: 1.35rem; font-weight: 650; line-height: 1.2;">{value}</div>
         </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def inject_design_system():
+    st.markdown(
+        """
+        <style>
+            .stApp {
+                background: #f5f7fb;
+            }
+            section[data-testid="stSidebar"] {
+                background: #eef2f7;
+                border-right: 1px solid rgba(16, 24, 40, 0.08);
+            }
+            div[data-testid="stVerticalBlockBorderWrapper"] {
+                border-radius: 8px;
+                border-color: rgba(16, 24, 40, 0.10);
+                box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+                background: rgba(255, 255, 255, 0.92);
+            }
+            div[data-testid="stDataFrame"],
+            div[data-testid="stTable"],
+            div[data-testid="stPlotlyChart"],
+            div[data-testid="stPydeckChart"] {
+                border-radius: 8px;
+                overflow: hidden;
+            }
+            div[data-testid="stMetric"] {
+                padding: 0.7rem 0.85rem;
+                border: 1px solid rgba(16, 24, 40, 0.10);
+                border-radius: 8px;
+                background: rgba(255, 255, 255, 0.92);
+            }
+            .stButton > button,
+            div[data-baseweb="select"] > div,
+            div[data-baseweb="input"] > div {
+                border-radius: 8px;
+            }
+            h1, h2, h3 {
+                color: #172033;
+                letter-spacing: 0;
+            }
+        </style>
         """,
         unsafe_allow_html=True,
     )
@@ -947,6 +995,18 @@ def render_gallery(gallery_df, data_root, gallery_type):
                     )
 
 
+def bird_highlight_filter(df):
+    detectors = df["Detector"].fillna("birdnet").astype(str).str.lower()
+    dataset_types = df["dataset_type"].fillna("birds").astype(str).str.lower()
+    return (detectors == "birdnet") | ((detectors == "birda") & (dataset_types != "bats"))
+
+
+def bat_highlight_filter(df):
+    detectors = df["Detector"].fillna("birdnet").astype(str).str.lower()
+    dataset_types = df["dataset_type"].fillna("birds").astype(str).str.lower()
+    return (detectors == "batdetect2") | ((detectors == "birda") & (dataset_types == "bats"))
+
+
 def split_command(command_text):
     return shlex.split(command_text, posix=os.name != "nt")
 
@@ -962,6 +1022,43 @@ def without_managed_birdnet_args(args):
             continue
         if arg in managed_args:
             skip_next = True
+            continue
+        if arg.startswith(managed_prefixes):
+            continue
+        cleaned.append(arg)
+    return cleaned
+
+
+def without_managed_birda_args(args):
+    managed_args = {
+        "--lat",
+        "--lon",
+        "--week",
+        "-o",
+        "--output-dir",
+        "-f",
+        "--format",
+        "-c",
+        "--min-confidence",
+        "-b",
+        "--batch-size",
+        "-m",
+        "--model",
+        "--bat",
+        "--gpu",
+        "--cpu",
+        "--force",
+    }
+    managed_prefixes = tuple(f"{arg}=" for arg in managed_args if arg.startswith("--"))
+    cleaned = []
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in managed_args:
+            if arg not in {"--gpu", "--cpu", "--force"}:
+                skip_next = True
             continue
         if arg.startswith(managed_prefixes):
             continue
@@ -1527,7 +1624,7 @@ def render_processing_page(data_root, db_path):
     resolved_db_path = resolve_db_path(db_path, data_root)
 
     st.subheader("1. Prepare Dataset Folder")
-    st.caption("Create or select a dataset folder. Audio will be stored in that dataset's `audio` folder; analyzer outputs go to `birdnet` and `batdetect2_outputs`.")
+    st.caption("Create or select a dataset folder. Audio will be stored in that dataset's `audio` folder; analyzer outputs go to `birda`, `birdnet`, and `batdetect2_outputs`.")
     dataset_folders = existing_dataset_folders(datasets_dir)
     dataset_options = ["Create new dataset"] + dataset_folders
     selected_dataset_option = st.selectbox(
@@ -1544,9 +1641,11 @@ def render_processing_page(data_root, db_path):
     dataset_audio_dir = dataset_dir / "audio"
     birdnet_output_dir = dataset_dir / "birdnet"
     batdetect_output_dir = dataset_dir / "batdetect2_outputs"
+    birda_output_dir = dataset_dir / "birda"
 
     if st.button("Create dataset folders"):
         dataset_audio_dir.mkdir(parents=True, exist_ok=True)
+        birda_output_dir.mkdir(parents=True, exist_ok=True)
         birdnet_output_dir.mkdir(parents=True, exist_ok=True)
         batdetect_output_dir.mkdir(parents=True, exist_ok=True)
         st.success(f"Created folder structure: {dataset_dir}")
@@ -1557,11 +1656,13 @@ def render_processing_page(data_root, db_path):
         (".BirdNET.selection.table.txt", ".BirdNET.selection.table.csv", ".selection.table.txt", ".selection.table.csv", ".csv", ".txt"),
     )
     batdetect_output_count = count_files_with_suffixes(batdetect_output_dir, (".csv", ".json"))
+    birda_output_count = count_files_with_suffixes(birda_output_dir, (".csv", ".json", ".parquet"))
     st.caption(f"Dataset audio folder: {dataset_audio_dir}")
     st.caption(f"Audio files already in dataset: {target_count}")
+    st.caption(f"Birda output files: {birda_output_count}")
     st.caption(f"BirdNET output files: {birdnet_output_count}")
     st.caption(f"BatDetect2 output files: {batdetect_output_count}")
-    if target_count and not birdnet_output_count and not batdetect_output_count:
+    if target_count and not birdnet_output_count and not batdetect_output_count and not birda_output_count:
         st.success("This dataset has audio and no analyzer outputs yet. It is ready to analyze.")
     elif target_count:
         st.info("This dataset already has audio and some analyzer outputs.")
@@ -1603,17 +1704,14 @@ def render_processing_page(data_root, db_path):
         st.success(f"Ready to analyze {audio_count} audio files from the dataset audio folder.")
 
     st.subheader("3. Run Analyzers")
-
-    birdnet_available = (
-        shutil.which("birdnet-analyze")
-        or shutil.which("birdnet-analyzer")
-        or shutil.which("birdnet_analyzer")
+    st.info(
+        "For best performance, use Birda when it is installed. It supports GPU acceleration, modern model management, "
+        "and skip-existing behavior. BirdNET Analyzer and BatDetect2 remain available as compatibility backends."
     )
-    default_birdnet_command = birdnet_available or "birdnet-analyze"
-    birdnet_command = st.text_input("BirdNET command", value=default_birdnet_command)
+
     birdnet_lat, birdnet_lon = render_birdnet_location_picker()
     dataset_location_name = st.text_input("Dataset location name", value=dataset_name)
-    if st.button("Save BirdNET location to manifest and database"):
+    if st.button("Save analyzer location to manifest and database"):
         try:
             updated_rows = save_dataset_location_to_manifest(
                 manifest_path,
@@ -1639,12 +1737,94 @@ def render_processing_page(data_root, db_path):
             st.error(f"Could not save location: {exc}")
     default_birdnet_date = first_recording_date(audio_dir)
     birdnet_date = st.date_input(
-        "BirdNET week date",
+        "Analyzer week date",
         value=default_birdnet_date,
-        help="Pick a representative recording date. The ISO week number is passed to BirdNET as --week.",
+        help="Pick a representative recording date. The ISO week number is passed to BirdNET/Birda as week context.",
     )
     birdnet_week = int(birdnet_date.isocalendar().week)
-    st.caption(f"BirdNET week: {birdnet_week} from {birdnet_date:%Y-%m-%d}")
+    st.caption(f"Analyzer week: {birdnet_week} from {birdnet_date:%Y-%m-%d}")
+
+    birda_available = shutil.which("birda")
+    birda_command = st.text_input("Birda command", value=birda_available or "birda")
+    birda_cols = st.columns(4)
+    with birda_cols[0]:
+        birda_mode = st.selectbox("Birda analysis", ["Birds", "Bats"], help="Birds uses a BirdNET/Perch-style model. Bats uses Birda's BattyBirdNET mode.")
+    with birda_cols[1]:
+        birda_device = st.selectbox("Device", ["Auto", "GPU", "CPU"], help="GPU uses CUDA when the installed Birda build supports it.")
+    with birda_cols[2]:
+        birda_confidence = st.number_input("Birda minimum confidence", min_value=0.01, max_value=0.99, value=0.30, step=0.05)
+    with birda_cols[3]:
+        birda_batch_size = st.number_input("Birda batch size", min_value=1, max_value=512, value=256, step=8)
+
+    birda_model = st.text_input(
+        "Birda model",
+        value="",
+        help="Leave empty for Birda's default model, or use names such as birdnet-v24, birdnet-v30, or perch-v2 after installing them with Birda.",
+    )
+    birda_bat_region = st.text_input(
+        "Birda bat region",
+        value="eu",
+        help="Used only for bat analysis. Examples from Birda include eu, uk, sweden, bavaria, usa-east.",
+    )
+    birda_force = st.checkbox(
+        "Re-run files that already have Birda outputs",
+        value=False,
+        help="Leave this off when adding new WAV files. Birda skips existing outputs unless --force is used.",
+    )
+    birda_extra_args = st.text_input("Birda extra arguments", value="")
+
+    if not birda_available:
+        st.warning("Birda is not currently on PATH. Install the Windows CUDA Birda release, then restart the dashboard.")
+
+    if st.button("Run Birda"):
+        birda_output_dir.mkdir(parents=True, exist_ok=True)
+        extra_args = without_managed_birda_args(split_command(birda_extra_args))
+        command = split_command(birda_command) + [
+            "--output-dir",
+            str(birda_output_dir),
+            "--format",
+            "csv",
+            "--min-confidence",
+            str(birda_confidence),
+            "--batch-size",
+            str(int(birda_batch_size)),
+            "--lat",
+            f"{birdnet_lat:.6f}",
+            "--lon",
+            f"{birdnet_lon:.6f}",
+            "--week",
+            str(birdnet_week),
+        ]
+        if birda_device == "GPU":
+            command.append("--gpu")
+        elif birda_device == "CPU":
+            command.append("--cpu")
+        if birda_model.strip():
+            command.extend(["--model", birda_model.strip()])
+        if birda_mode == "Bats":
+            command.extend(["--bat", birda_bat_region.strip() or "eu"])
+        if birda_force:
+            command.append("--force")
+        command += extra_args + [str(audio_dir)]
+
+        st.code(" ".join(f'"{part}"' if " " in part else part for part in command), language="powershell")
+        returncode, stdout, stderr = run_monitored_command(
+            command,
+            PROJECT_ROOT,
+            f"Birda {birda_mode}",
+            audio_dir,
+            birda_output_dir,
+            (".csv", ".json", ".parquet"),
+        )
+        show_command_result(returncode, stdout, stderr)
+
+    birdnet_available = (
+        shutil.which("birdnet-analyze")
+        or shutil.which("birdnet-analyzer")
+        or shutil.which("birdnet_analyzer")
+    )
+    default_birdnet_command = birdnet_available or "birdnet-analyze"
+    birdnet_command = st.text_input("BirdNET command", value=default_birdnet_command)
     birdnet_extra_args = st.text_input("BirdNET extra arguments", value="")
     st.caption("The app runs: BirdNET command + location + week + extra arguments + `-o <birdnet folder> <audio folder>`.")
 
@@ -1807,6 +1987,7 @@ def render_processing_page(data_root, db_path):
 
 
 st.set_page_config(page_title=APP_TITLE, page_icon="🎙️", layout="wide")
+inject_design_system()
 
 with st.sidebar:
     if LOGO_PATH.exists():
@@ -1864,10 +2045,10 @@ if view_mode == "Bird highlights":
     selected_dataset_ids = render_highlight_scope_selector(datasets, dataset_labels, selected_dataset_id, "birdnet")
     if selected_dataset_ids is not None:
         if platform_schema:
-            scoped = load_platform_detections(con, detector="birdnet", dataset_ids=selected_dataset_ids)
+            scoped = load_platform_detections(con, detector=["birdnet", "birda"], dataset_ids=selected_dataset_ids)
+            scoped = scoped[bird_highlight_filter(scoped)] if not scoped.empty else scoped
         else:
-            detector_values = df["Detector"].fillna("birdnet").astype(str).str.lower()
-            scoped = df[(detector_values == "birdnet") & df["dataset_id"].isin(selected_dataset_ids)]
+            scoped = df[bird_highlight_filter(df) & df["dataset_id"].isin(selected_dataset_ids)]
         if not scoped.empty:
             scoped["DateTime"] = pd.to_datetime(scoped["DateTime"])
         render_gallery(scoped, data_root, "birdnet")
@@ -1877,10 +2058,10 @@ if view_mode == "Bat highlights":
     selected_dataset_ids = render_highlight_scope_selector(datasets, dataset_labels, selected_dataset_id, "batdetect2")
     if selected_dataset_ids is not None:
         if platform_schema:
-            scoped = load_platform_detections(con, detector="batdetect2", dataset_ids=selected_dataset_ids)
+            scoped = load_platform_detections(con, detector=["batdetect2", "birda"], dataset_ids=selected_dataset_ids)
+            scoped = scoped[bat_highlight_filter(scoped)] if not scoped.empty else scoped
         else:
-            detector_values = df["Detector"].fillna("birdnet").astype(str).str.lower()
-            scoped = df[(detector_values == "batdetect2") & df["dataset_id"].isin(selected_dataset_ids)]
+            scoped = df[bat_highlight_filter(df) & df["dataset_id"].isin(selected_dataset_ids)]
         if not scoped.empty:
             scoped["DateTime"] = pd.to_datetime(scoped["DateTime"])
         render_gallery(scoped, data_root, "batdetect2")
@@ -1993,11 +2174,23 @@ matrix_height = max(420, min(1200, 26 * len(occurrence_matrix)))
 matrix_fig = px.imshow(
     occurrence_matrix,
     labels={"x": matrix_settings["label"], "y": "Species", "color": "Detections"},
-    color_continuous_scale="YlGnBu",
+    color_continuous_scale=[
+        [0.0, "#e8edf4"],
+        [0.25, "#cfeaf2"],
+        [0.55, "#73c8df"],
+        [0.8, "#1c95c9"],
+        [1.0, "#06649b"],
+    ],
     aspect="auto",
     text_auto=len(occurrence_matrix.columns) <= 60,
 )
-matrix_fig.update_layout(height=matrix_height, margin=dict(l=10, r=10, t=20, b=10))
+matrix_fig.update_layout(
+    height=matrix_height,
+    margin=dict(l=10, r=10, t=20, b=10),
+    paper_bgcolor="rgba(255,255,255,0)",
+    plot_bgcolor="rgba(255,255,255,0)",
+)
+matrix_fig.update_traces(xgap=2, ygap=2)
 matrix_fig.update_xaxes(side="top")
 st.plotly_chart(matrix_fig, use_container_width=True)
 
@@ -2133,9 +2326,12 @@ filtered_df["Display"] = (
 selected_detection = st.selectbox("Select detection", filtered_df["Display"])
 selected_index = int(selected_detection.split(" | ")[0])
 row = filtered_df.loc[selected_index]
+inspector_kind = str(row.get("Detector") or "birdnet").lower()
+if str(row.get("dataset_type") or "").lower() == "bats":
+    inspector_kind = "bats"
 render_audio_inspector(
     row,
     data_root,
-    str(row.get("Detector") or "birdnet").lower(),
+    inspector_kind,
     key_prefix=f"inspector_{selected_index}",
 )
