@@ -1635,17 +1635,16 @@ def render_processing_page(data_root, db_path):
     st.subheader("1. Prepare Dataset Folder")
     st.caption("Create or select a dataset folder. Audio will be stored in that dataset's `audio` folder; analyzer outputs go to `birda`, `birdnet`, and `batdetect2_outputs`.")
     dataset_folders = existing_dataset_folders(datasets_dir)
-    dataset_folder_lookup = {path.name: path for path in dataset_folders}
-    dataset_options = ["Create new dataset"] + list(dataset_folder_lookup)
-    selected_dataset_option = st.selectbox(
+    create_dataset_label = "Create new dataset"
+    dataset_label_lookup = {processing_folder_label(path): path.name for path in dataset_folders}
+    dataset_options = [create_dataset_label] + list(dataset_label_lookup)
+    selected_dataset_label = st.selectbox(
         "Dataset folder",
         dataset_options,
-        format_func=lambda option: option
-        if option == "Create new dataset"
-        else processing_folder_label(dataset_folder_lookup[option]),
+        key="processing_dataset_folder",
     )
-    if selected_dataset_option != "Create new dataset":
-        dataset_name = selected_dataset_option
+    if selected_dataset_label != create_dataset_label:
+        dataset_name = dataset_label_lookup[selected_dataset_label]
         st.text_input("Dataset folder name", value=dataset_name, disabled=True)
     else:
         dataset_name = st.text_input("Dataset folder name", value="11_new_dataset")
