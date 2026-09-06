@@ -1,5 +1,6 @@
 import os
 import html
+import io
 import json
 import shlex
 import shutil
@@ -505,6 +506,11 @@ def load_audio_segment(wav_path, start, duration):
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
+def cached_audio_segment(path, mtime_ns, start, duration):
+    return load_audio_segment(Path(path), start, duration)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
 def segment_dbfs(path, start, duration):
     wav_path = Path(path)
     y, _ = load_audio_segment(wav_path, start, duration)
@@ -566,7 +572,9 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix):
         return
 
     try:
-        y, sr = load_audio_segment(wav_path, start, duration)
+        cache_start = round(start, 3)
+        cache_duration = round(duration, 3)
+        y, sr = cached_audio_segment(str(wav_path.resolve()), wav_path.stat().st_mtime_ns, cache_start, cache_duration)
 
         playback_options = {
             "Original speed": 1,
@@ -584,9 +592,9 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix):
         expansion_factor = playback_options[playback_label]
         playback_sr = max(1, int(round(sr / expansion_factor)))
 
-        buffer = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        sf.write(buffer.name, y, playback_sr)
-        st.audio(buffer.name)
+        buffer = io.BytesIO()
+        sf.write(buffer, y, playback_sr, format="WAV")
+        st.audio(buffer.getvalue(), format="audio/wav")
 
         if expansion_factor > 1:
             st.caption(
@@ -997,12 +1005,21 @@ def render_gallery(gallery_df, data_root, gallery_type):
                     )
                     selected_rank = int(selected_choice.split(" | ")[0])
                     selected_row_index = best.loc[best["Rank"] == selected_rank, "RowIndex"].iloc[0]
-                    render_audio_inspector(
-                        species_df.loc[selected_row_index],
-                        data_root,
-                        gallery_type,
-                        key_prefix=f"gallery_{gallery_type}_{species_key}_{selected_rank}",
-                    )
+                    inspector_key = f"gallery_{gallery_type}_{species_key}_loaded_rank"
+                    if st.button(
+                        "Load audio and spectrogram",
+                        key=f"gallery_{gallery_type}_{species_key}_load_{selected_rank}",
+                    ):
+                        st.session_state[inspector_key] = selected_rank
+                    if st.session_state.get(inspector_key) == selected_rank:
+                        render_audio_inspector(
+                            species_df.loc[selected_row_index],
+                            data_root,
+                            gallery_type,
+                            key_prefix=f"gallery_{gallery_type}_{species_key}_{selected_rank}",
+                        )
+                    else:
+                        st.caption("Select a highlight, then load it when you want to play the audio.")
 
 
 def bird_highlight_filter(df):
