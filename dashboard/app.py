@@ -1072,6 +1072,8 @@ def without_managed_birda_args(args):
         "-m",
         "--model",
         "--bat",
+        "--output-mode",
+        "--no-progress",
         "--gpu",
         "--cpu",
         "--tensorrt",
@@ -1412,6 +1414,370 @@ def run_monitored_command(command, cwd, label, audio_dir, output_dir, output_suf
                 path.unlink(missing_ok=True)
             except Exception:
                 pass
+
+
+def render_birda_bird_runner(audio_dir, birda_output_dir, birdnet_lat, birdnet_lon, birdnet_week):
+    birda_available = shutil.which("birda")
+    birda_command = st.text_input("Birda command", value=birda_available or "birda", key="bird_birda_command")
+    birda_cols = st.columns(3)
+    with birda_cols[0]:
+        birda_device = st.selectbox(
+            "Device",
+            ["Auto", "GPU", "TensorRT", "CPU"],
+            key="bird_birda_device",
+            help="GPU uses CUDA. TensorRT is fastest when the TensorRT DLL folder is on PATH or copied beside birda.exe.",
+        )
+    with birda_cols[1]:
+        birda_confidence = st.number_input(
+            "Minimum confidence",
+            min_value=0.01,
+            max_value=0.99,
+            value=0.30,
+            step=0.05,
+            key="bird_birda_confidence",
+        )
+    with birda_cols[2]:
+        birda_batch_size = st.number_input(
+            "Batch size",
+            min_value=1,
+            max_value=512,
+            value=8 if birda_device == "TensorRT" else 256,
+            step=8,
+            key="bird_birda_batch_size",
+        )
+    st.caption("Suggested batch sizes: CUDA/GPU 256, TensorRT 8-32, CPU 8.")
+
+    birda_model = st.text_input(
+        "Birda model",
+        value="birdnet-v24",
+        key="bird_birda_model",
+        help="Use an installed Birda model such as birdnet-v24, birdnet-v30, or perch-v2.",
+    )
+    birda_force = st.checkbox(
+        "Re-run files that already have Birda outputs",
+        value=False,
+        key="bird_birda_force",
+        help="Leave this off when adding new WAV files. Birda skips existing outputs unless --force is used.",
+    )
+    birda_extra_args = st.text_input("Birda extra arguments", value="", key="bird_birda_extra")
+
+    if not birda_available:
+        st.warning("Birda is not currently on PATH. Install the Windows CUDA Birda release, then restart the dashboard.")
+
+    if st.button("Run Birda bird detection"):
+        birda_output_dir.mkdir(parents=True, exist_ok=True)
+        removed_locks = remove_stale_birda_locks(birda_output_dir)
+        if removed_locks:
+            st.info(f"Removed {len(removed_locks)} stale Birda lock file(s) before starting.")
+        extra_args = without_managed_birda_args(split_command(birda_extra_args))
+        command = split_command(birda_command) + [
+            "--output-mode",
+            "ndjson",
+            "--no-progress",
+            "--output-dir",
+            str(birda_output_dir),
+            "--format",
+            "csv",
+            "--min-confidence",
+            str(birda_confidence),
+            "--batch-size",
+            str(int(birda_batch_size)),
+            "--lat",
+            f"{birdnet_lat:.6f}",
+            "--lon",
+            f"{birdnet_lon:.6f}",
+            "--week",
+            str(birdnet_week),
+        ]
+        if birda_device == "GPU":
+            command.append("--gpu")
+        elif birda_device == "TensorRT":
+            command.append("--tensorrt")
+        elif birda_device == "CPU":
+            command.append("--cpu")
+        if birda_model.strip():
+            command.extend(["--model", birda_model.strip()])
+        if birda_force:
+            command.append("--force")
+        command += extra_args + [str(audio_dir)]
+
+        st.code(" ".join(f'"{part}"' if " " in part else part for part in command), language="powershell")
+        returncode, stdout, stderr = run_monitored_command(
+            command,
+            PROJECT_ROOT,
+            "Birda birds",
+            audio_dir,
+            birda_output_dir,
+            (".csv", ".json", ".parquet"),
+        )
+        show_command_result(returncode, stdout, stderr)
+
+
+def render_birdnet_analyzer_runner(audio_dir, birdnet_output_dir, birdnet_lat, birdnet_lon, birdnet_week):
+    birdnet_available = (
+        shutil.which("birdnet-analyze")
+        or shutil.which("birdnet-analyzer")
+        or shutil.which("birdnet_analyzer")
+    )
+    birdnet_command = st.text_input("BirdNET command", value=birdnet_available or "birdnet-analyze", key="birdnet_command")
+    birdnet_extra_args = st.text_input("BirdNET extra arguments", value="", key="birdnet_extra_args")
+    st.caption("The app runs: BirdNET command + location + week + extra arguments + `-o <birdnet folder> <audio folder>`.")
+
+    if st.button("Run BirdNET Analyzer"):
+        birdnet_output_dir.mkdir(parents=True, exist_ok=True)
+        extra_args = without_managed_birdnet_args(split_command(birdnet_extra_args))
+        command = split_command(birdnet_command) + [
+            "--lat",
+            f"{birdnet_lat:.6f}",
+            "--lon",
+            f"{birdnet_lon:.6f}",
+            "--week",
+            str(birdnet_week),
+        ] + extra_args + [
+            "-o",
+            str(birdnet_output_dir),
+            str(audio_dir),
+        ]
+        st.code(" ".join(f'"{part}"' if " " in part else part for part in command), language="powershell")
+        returncode, stdout, stderr = run_monitored_command(
+            command,
+            PROJECT_ROOT,
+            "BirdNET Analyzer",
+            audio_dir,
+            birdnet_output_dir,
+            (
+                ".BirdNET.selection.table.txt",
+                ".BirdNET.selection.table.csv",
+                ".selection.table.txt",
+                ".selection.table.csv",
+                ".csv",
+                ".txt",
+            ),
+        )
+        show_command_result(returncode, stdout, stderr)
+
+
+def render_batdetect_runner(audio_dir, batdetect_output_dir):
+    bat_cols = st.columns(2)
+    with bat_cols[0]:
+        bat_threshold = st.number_input("BatDetect2 threshold", min_value=0.01, max_value=0.99, value=0.30, step=0.05)
+    with bat_cols[1]:
+        bat_model = st.text_input("BatDetect2 model checkpoint", value="")
+    rerun_batdetect = st.checkbox(
+        "Re-run files that already have BatDetect2 outputs",
+        value=False,
+        help=(
+            "Leave this off when you add new WAV files to an existing folder. "
+            "The wrapper skips audio files that already have matching .csv or .json BatDetect2 outputs."
+        ),
+    )
+    st.caption("BatDetect2 skips already analyzed files by default. Turn on re-run only when you want to recompute existing outputs.")
+
+    if st.button("Run BatDetect2"):
+        batdetect_output_dir.mkdir(parents=True, exist_ok=True)
+        command = [
+            sys.executable,
+            str(SCRIPTS_DIR / "run_batdetect2.py"),
+            "--audio-dir",
+            str(audio_dir),
+            "--batdetect-output-dir",
+            str(batdetect_output_dir),
+            "--detection-threshold",
+            str(bat_threshold),
+        ]
+        if bat_model.strip():
+            command.extend(["--model", bat_model.strip()])
+        if rerun_batdetect:
+            command.append("--rerun-existing")
+        st.code(" ".join(f'"{part}"' if " " in part else part for part in command), language="powershell")
+        returncode, stdout, stderr = run_monitored_command(
+            command,
+            PROJECT_ROOT,
+            "BatDetect2",
+            audio_dir,
+            batdetect_output_dir,
+            (".csv", ".json"),
+        )
+        show_command_result(returncode, stdout, stderr)
+
+
+def clip_filename_timestamp(row, start):
+    base_time = pd.to_datetime(row["DateTime"]) - pd.to_timedelta(float(row["BeginTime"]), unit="s")
+    clip_time = base_time + pd.to_timedelta(start, unit="s")
+    return clip_time.strftime("%Y%m%d_%H%M%S")
+
+
+def clean_clip_species_name(value):
+    value = str(value or "Unknown").strip()
+    value = re.sub(r"[^A-Za-z0-9]+", "_", value).strip("_")
+    return value[:80] or "Unknown"
+
+
+def merge_clip_groups(detections, pad_seconds):
+    groups = []
+    if detections.empty:
+        return groups
+    for rel_audio_path, file_df in detections.groupby("relative_audio_path", sort=True):
+        file_df = file_df.sort_values(["BeginTime", "EndTime"]).copy()
+        active = None
+        for _, row in file_df.iterrows():
+            start = max(0.0, float(row["BeginTime"]) - pad_seconds)
+            end = float(row["EndTime"]) + pad_seconds
+            if active is None or start > active["end"]:
+                if active is not None:
+                    groups.append(active)
+                active = {"relative_audio_path": rel_audio_path, "start": start, "end": end, "rows": [row]}
+            else:
+                active["end"] = max(active["end"], end)
+                active["rows"].append(row)
+        if active is not None:
+            groups.append(active)
+    return groups
+
+
+def create_detection_clips(detections, data_root, dataset_dir, min_confidence, pad_seconds, max_clips, overwrite=False):
+    clips_dir = dataset_dir / "clips"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = clips_dir / "clips_manifest.csv"
+
+    selected = detections[detections["Confidence"] >= min_confidence].copy()
+    selected = selected.dropna(subset=["relative_audio_path", "BeginTime", "EndTime"])
+    if selected.empty:
+        return {"created": 0, "skipped": 0, "failed": 0, "manifest": manifest_path}
+
+    selected["relative_audio_path"] = selected["relative_audio_path"].astype(str)
+    clip_groups = merge_clip_groups(selected, float(pad_seconds))
+    if max_clips:
+        clip_groups = clip_groups[: int(max_clips)]
+
+    manifest_rows = []
+    if manifest_path.exists() and not overwrite:
+        try:
+            manifest_rows = pd.read_csv(manifest_path).to_dict("records")
+        except Exception:
+            manifest_rows = []
+
+    created = 0
+    skipped = 0
+    failed = 0
+    for group in clip_groups:
+        rows = group["rows"]
+        rel_audio = group["relative_audio_path"]
+        source_path = Path(rel_audio)
+        if not source_path.is_absolute():
+            source_path = data_root / source_path
+        if not source_path.exists():
+            failed += 1
+            continue
+
+        try:
+            with sf.SoundFile(str(source_path)) as audio_file:
+                sr = audio_file.samplerate
+                total_duration = audio_file.frames / sr if sr else 0
+                start = max(0.0, min(group["start"], total_duration))
+                end = max(start, min(group["end"], total_duration))
+                duration = end - start
+                if duration <= 0:
+                    failed += 1
+                    continue
+                audio_file.seek(int(start * sr))
+                y = audio_file.read(frames=int(duration * sr), dtype="float32", always_2d=False)
+        except Exception:
+            failed += 1
+            continue
+
+        species = sorted({str(row.get("CommonName") or "Unknown") for row in rows})
+        detectors = sorted({str(row.get("Detector") or "unknown") for row in rows})
+        first_row = rows[0]
+        species_part = clean_clip_species_name("_".join(species[:3]))
+        if len(species) > 3:
+            species_part += "_multi"
+        clip_name = f"{clip_filename_timestamp(first_row, start)}_{int(start):04d}-{int(end):04d}_{species_part}.wav"
+        clip_path = clips_dir / clip_name
+
+        if clip_path.exists() and not overwrite:
+            skipped += 1
+        else:
+            sf.write(str(clip_path), y, sr)
+            created += 1
+
+        mean_values = [row.get("MeanDbfs") for row in rows if pd.notna(row.get("MeanDbfs"))]
+        manifest_rows.append(
+            {
+                "clip_file": clip_path.relative_to(dataset_dir).as_posix(),
+                "source_audio_path": rel_audio,
+                "clip_start_seconds": round(start, 3),
+                "clip_end_seconds": round(end, 3),
+                "clip_duration_seconds": round(duration, 3),
+                "species": "; ".join(species),
+                "detectors": "; ".join(detectors),
+                "detections": len(rows),
+                "max_confidence": max(float(row.get("Confidence") or 0) for row in rows),
+                "min_mean_dbfs": min(mean_values) if mean_values else np.nan,
+            }
+        )
+
+    if manifest_rows:
+        manifest_df = pd.DataFrame(manifest_rows).drop_duplicates(subset=["clip_file"], keep="last")
+        manifest_df.to_csv(manifest_path, index=False)
+
+    return {"created": created, "skipped": skipped, "failed": failed, "manifest": manifest_path}
+
+
+def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
+    clips_dir = dataset_dir / "clips"
+    existing_clips = count_files_with_suffixes(clips_dir, (".wav", ".WAV"))
+    st.caption(f"Clip output folder: {clips_dir}")
+    st.caption(f"Existing clips: {existing_clips}")
+
+    if not resolved_db_path.exists():
+        st.warning("Build or update the database before creating clips. Clips are generated from database detections.")
+        return
+
+    try:
+        con = duckdb.connect(str(resolved_db_path), read_only=True)
+        detections = load_platform_detections(con, dataset_ids=dataset_ids)
+        con.close()
+    except Exception as exc:
+        st.warning(f"Could not load detections for clipping: {exc}")
+        return
+
+    if detections.empty:
+        st.info("No database detections found for this audio folder yet. Regenerate the manifest and rebuild/append the database first.")
+        return
+
+    detectors = sorted(detections["Detector"].fillna("birdnet").astype(str).unique())
+    dataset_summary = ", ".join(str(dataset_id) for dataset_id in dataset_ids)
+    st.caption(f"Using detections from database dataset(s): {dataset_summary}")
+    selected_detectors = st.multiselect("Detectors to clip", detectors, default=detectors, key="clip_detectors")
+    clip_cols = st.columns(4)
+    with clip_cols[0]:
+        min_confidence = st.number_input("Minimum confidence", min_value=0.01, max_value=0.99, value=0.50, step=0.05, key="clip_min_confidence")
+    with clip_cols[1]:
+        pad_seconds = st.number_input("Margin before/after", min_value=0.0, max_value=30.0, value=3.0, step=1.0, key="clip_pad_seconds")
+    with clip_cols[2]:
+        max_clips = st.number_input("Maximum clips", min_value=0, max_value=100000, value=0, step=100, help="Use 0 for no limit.", key="clip_max_clips")
+    with clip_cols[3]:
+        overwrite = st.checkbox("Overwrite existing clips", value=False, key="clip_overwrite")
+
+    clip_df = detections[detections["Detector"].fillna("birdnet").astype(str).isin(selected_detectors)]
+    clip_df = clip_df[clip_df["Confidence"] >= min_confidence]
+    clip_count = len(merge_clip_groups(clip_df, float(pad_seconds))) if not clip_df.empty else 0
+    st.caption(f"This would create/update up to {clip_count:,} merged clips from {len(clip_df):,} detections.")
+
+    if st.button("Create detection clips"):
+        with st.spinner("Creating clipped playback WAVs..."):
+            result = create_detection_clips(
+                clip_df,
+                data_root,
+                dataset_dir,
+                float(min_confidence),
+                float(pad_seconds),
+                int(max_clips) if max_clips else None,
+                overwrite=overwrite,
+            )
+        st.success(f"Clip export complete: created {result['created']}, skipped {result['skipped']}, failed {result['failed']}.")
+        st.caption(f"Manifest: {result['manifest']}")
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -1939,179 +2305,27 @@ def render_processing_page(data_root, db_path):
     birdnet_week = int(birdnet_date.isocalendar().week)
     st.caption(f"Analyzer week: {birdnet_week} from {birdnet_date:%Y-%m-%d}")
 
-    birda_available = shutil.which("birda")
-    birda_command = st.text_input("Birda command", value=birda_available or "birda")
-    birda_cols = st.columns(4)
-    with birda_cols[0]:
-        birda_mode = st.selectbox("Birda analysis", ["Birds", "Bats"], help="Birds uses a BirdNET/Perch-style model. Bats uses Birda's BattyBirdNET mode.")
-    with birda_cols[1]:
-        birda_device = st.selectbox(
-            "Device",
-            ["Auto", "GPU", "TensorRT", "CPU"],
-            help="GPU uses CUDA. TensorRT is fastest when the TensorRT DLL folder is on PATH or copied beside birda.exe.",
+    with st.container(border=True):
+        st.markdown("**Bird Detection**")
+        bird_backend = st.selectbox(
+            "Bird analyzer",
+            ["Birda", "BirdNET Analyzer"],
+            help="Birda is the recommended fast backend. BirdNET Analyzer is kept for compatibility with original BirdNET output.",
         )
-    with birda_cols[2]:
-        birda_confidence = st.number_input("Birda minimum confidence", min_value=0.01, max_value=0.99, value=0.30, step=0.05)
-    with birda_cols[3]:
-        birda_batch_size = st.number_input("Birda batch size", min_value=1, max_value=512, value=256, step=8)
-    st.caption("Suggested batch sizes: CUDA/GPU 256, TensorRT 32, CPU 8. TensorRT can spend extra time compiling the first run for a new model or batch size.")
+        if bird_backend == "Birda":
+            render_birda_bird_runner(audio_dir, birda_output_dir, birdnet_lat, birdnet_lon, birdnet_week)
+        else:
+            render_birdnet_analyzer_runner(audio_dir, birdnet_output_dir, birdnet_lat, birdnet_lon, birdnet_week)
 
-    birda_model = st.text_input(
-        "Birda model",
-        value="birdnet-v24",
-        help="Use an installed Birda model such as birdnet-v24, birdnet-v30, or perch-v2. Install models with `birda models install <model>`.",
-    )
-    birda_bat_region = st.text_input(
-        "Birda bat region",
-        value="eu",
-        help="Used only for bat analysis. Examples from Birda include eu, uk, sweden, bavaria, usa-east.",
-    )
-    birda_force = st.checkbox(
-        "Re-run files that already have Birda outputs",
-        value=False,
-        help="Leave this off when adding new WAV files. Birda skips existing outputs unless --force is used.",
-    )
-    birda_extra_args = st.text_input("Birda extra arguments", value="")
-
-    if not birda_available:
-        st.warning("Birda is not currently on PATH. Install the Windows CUDA Birda release, then restart the dashboard.")
-
-    if st.button("Run Birda"):
-        birda_output_dir.mkdir(parents=True, exist_ok=True)
-        removed_locks = remove_stale_birda_locks(birda_output_dir)
-        if removed_locks:
-            st.info(f"Removed {len(removed_locks)} stale Birda lock file(s) before starting.")
-        extra_args = without_managed_birda_args(split_command(birda_extra_args))
-        command = split_command(birda_command) + [
-            "--output-mode",
-            "ndjson",
-            "--no-progress",
-            "--output-dir",
-            str(birda_output_dir),
-            "--format",
-            "csv",
-            "--min-confidence",
-            str(birda_confidence),
-            "--batch-size",
-            str(int(birda_batch_size)),
-            "--lat",
-            f"{birdnet_lat:.6f}",
-            "--lon",
-            f"{birdnet_lon:.6f}",
-            "--week",
-            str(birdnet_week),
-        ]
-        if birda_device == "GPU":
-            command.append("--gpu")
-        elif birda_device == "TensorRT":
-            command.append("--tensorrt")
-        elif birda_device == "CPU":
-            command.append("--cpu")
-        if birda_model.strip():
-            command.extend(["--model", birda_model.strip()])
-        if birda_mode == "Bats":
-            command.extend(["--bat", birda_bat_region.strip() or "eu"])
-        if birda_force:
-            command.append("--force")
-        command += extra_args + [str(audio_dir)]
-
-        st.code(" ".join(f'"{part}"' if " " in part else part for part in command), language="powershell")
-        returncode, stdout, stderr = run_monitored_command(
-            command,
-            PROJECT_ROOT,
-            f"Birda {birda_mode}",
-            audio_dir,
-            birda_output_dir,
-            (".csv", ".json", ".parquet"),
+    with st.container(border=True):
+        st.markdown("**Bat Detection**")
+        bat_backend = st.selectbox(
+            "Bat analyzer",
+            ["BatDetect2"],
+            help="BatDetect2 output is stored separately in batdetect2_outputs.",
         )
-        show_command_result(returncode, stdout, stderr)
-
-    birdnet_available = (
-        shutil.which("birdnet-analyze")
-        or shutil.which("birdnet-analyzer")
-        or shutil.which("birdnet_analyzer")
-    )
-    default_birdnet_command = birdnet_available or "birdnet-analyze"
-    birdnet_command = st.text_input("BirdNET command", value=default_birdnet_command)
-    birdnet_extra_args = st.text_input("BirdNET extra arguments", value="")
-    st.caption("The app runs: BirdNET command + location + week + extra arguments + `-o <birdnet folder> <audio folder>`.")
-
-    if st.button("Run BirdNET Analyzer"):
-        birdnet_output_dir.mkdir(parents=True, exist_ok=True)
-        extra_args = without_managed_birdnet_args(split_command(birdnet_extra_args))
-        command = split_command(birdnet_command) + [
-            "--lat",
-            f"{birdnet_lat:.6f}",
-            "--lon",
-            f"{birdnet_lon:.6f}",
-            "--week",
-            str(birdnet_week),
-        ] + extra_args + [
-            "-o",
-            str(birdnet_output_dir),
-            str(audio_dir),
-        ]
-        st.code(" ".join(f'"{part}"' if " " in part else part for part in command), language="powershell")
-        returncode, stdout, stderr = run_monitored_command(
-            command,
-            PROJECT_ROOT,
-            "BirdNET Analyzer",
-            audio_dir,
-            birdnet_output_dir,
-            (
-                ".BirdNET.selection.table.txt",
-                ".BirdNET.selection.table.csv",
-                ".selection.table.txt",
-                ".selection.table.csv",
-                ".csv",
-                ".txt",
-            ),
-        )
-        show_command_result(returncode, stdout, stderr)
-
-    bat_cols = st.columns(2)
-    with bat_cols[0]:
-        bat_threshold = st.number_input("BatDetect2 threshold", min_value=0.01, max_value=0.99, value=0.30, step=0.05)
-    with bat_cols[1]:
-        bat_model = st.text_input("BatDetect2 model checkpoint", value="")
-    rerun_batdetect = st.checkbox(
-        "Re-run files that already have BatDetect2 outputs",
-        value=False,
-        help=(
-            "Leave this off when you add new WAV files to an existing folder. "
-            "The wrapper skips audio files that already have matching .csv or .json BatDetect2 outputs."
-        ),
-    )
-    st.caption(
-        "BatDetect2 skips already analyzed files by default. Turn on re-run only when you want to recompute existing outputs."
-    )
-
-    if st.button("Run BatDetect2"):
-        batdetect_output_dir.mkdir(parents=True, exist_ok=True)
-        command = [
-            sys.executable,
-            str(SCRIPTS_DIR / "run_batdetect2.py"),
-            "--audio-dir",
-            str(audio_dir),
-            "--batdetect-output-dir",
-            str(batdetect_output_dir),
-            "--detection-threshold",
-            str(bat_threshold),
-        ]
-        if bat_model.strip():
-            command.extend(["--model", bat_model.strip()])
-        if rerun_batdetect:
-            command.append("--rerun-existing")
-        st.code(" ".join(f'"{part}"' if " " in part else part for part in command), language="powershell")
-        returncode, stdout, stderr = run_monitored_command(
-            command,
-            PROJECT_ROOT,
-            "BatDetect2",
-            audio_dir,
-            batdetect_output_dir,
-            (".csv", ".json"),
-        )
-        show_command_result(returncode, stdout, stderr)
+        if bat_backend == "BatDetect2":
+            render_batdetect_runner(audio_dir, batdetect_output_dir)
 
     st.subheader("4. Update Manifest And Database")
     st.info(
@@ -2185,6 +2399,26 @@ def render_processing_page(data_root, db_path):
             with st.spinner("Replacing database from manifest..."):
                 returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
             show_command_result(returncode, stdout, stderr)
+
+    st.subheader("5. Create Playback Clips")
+    st.info(
+        "Clips are made from database detections after analyzer import. Overlapping detections are merged into one WAV clip, "
+        "so the same moment is not saved repeatedly. Bird and bat detections that share this audio folder are clipped together. "
+        "Original WAVs are left untouched."
+    )
+    clip_dataset_ids = []
+    if manifest_path.exists():
+        try:
+            manifest_df = pd.read_csv(manifest_path)
+            for _, manifest_row in manifest_df.iterrows():
+                audio_value = str(manifest_row.get("audio_dir") or "")
+                if Path(audio_value).parent.name == dataset_name:
+                    clip_dataset_ids.append(str(manifest_row["dataset_id"]))
+        except Exception as exc:
+            st.warning(f"Could not read manifest for clip dataset choices: {exc}")
+    if not clip_dataset_ids:
+        clip_dataset_ids = [dataset_name]
+    render_clip_creator(data_root, resolved_db_path, clip_dataset_ids, dataset_dir)
 
     if manifest_path.exists():
         st.subheader("Manifest Preview")
