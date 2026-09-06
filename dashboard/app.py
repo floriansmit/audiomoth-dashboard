@@ -305,6 +305,52 @@ def inject_design_system():
             div[data-baseweb="input"] > div {
                 border-radius: 8px;
             }
+            .stTabs [data-baseweb="tab-list"],
+            [data-testid="stTabs"] [role="tablist"] {
+                position: sticky !important;
+                top: 0 !important;
+                z-index: 1000 !important;
+                gap: 0.35rem;
+                padding: 0.45rem 0;
+                border-bottom: 1px solid rgba(128, 128, 128, 0.30);
+                background: #f5f7fb;
+                box-shadow: 0 6px 12px rgba(16, 24, 40, 0.05);
+                overflow-x: auto;
+            }
+            .stTabs [data-baseweb="tab"],
+            [data-testid="stTabs"] [role="tab"] {
+                flex: 0 0 auto;
+                height: 2.8rem;
+                padding: 0 0.78rem;
+                border: 1px solid rgba(128, 128, 128, 0.32);
+                border-radius: 8px;
+                background: rgba(128, 128, 128, 0.09);
+                font-size: 0.95rem;
+                font-weight: 650;
+                white-space: nowrap;
+                transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+            }
+            .stTabs [data-baseweb="tab"]:hover,
+            [data-testid="stTabs"] [role="tab"]:hover {
+                border-color: rgba(239, 68, 68, 0.65);
+                background: rgba(239, 68, 68, 0.09);
+            }
+            .stTabs [data-baseweb="tab"][aria-selected="true"],
+            [data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+                border-color: #ef4444;
+                background: rgba(239, 68, 68, 0.18);
+                color: #ef4444;
+                box-shadow: inset 0 -3px 0 #ef4444;
+            }
+            .stTabs [data-baseweb="tab"]:focus-visible,
+            [data-testid="stTabs"] [role="tab"]:focus-visible {
+                outline: 2px solid #ef4444;
+                outline-offset: 2px;
+            }
+            .stTabs [data-baseweb="tab-highlight"],
+            [data-testid="stTabs"] [data-baseweb="tab-highlight"] {
+                display: none;
+            }
             h1, h2, h3 {
                 color: #172033;
                 letter-spacing: 0;
