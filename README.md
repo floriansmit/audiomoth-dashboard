@@ -184,7 +184,7 @@ By default, the BatDetect2 helper skips audio files that already have matching `
 python scripts\run_batdetect2.py --audio-dir "datasets\01_site_name\audio" --rerun-existing
 ```
 
-Birda is an optional external binary rather than a Python package in `requirements.txt`. For best performance on Windows/NVIDIA systems, install the Birda CUDA release from [tphakala/birda](https://github.com/tphakala/birda), add `birda.exe` to PATH, then restart the dashboard. TensorRT can be enabled separately by copying the TensorRT 10 DLLs into the Birda installation folder. The Processing page can then run Birda with GPU, TensorRT, batch-size, BirdNET/Perch model, and BattyBirdNET region settings.
+Birda is an optional external binary rather than a Python package in `requirements.txt`. For best performance on Windows/NVIDIA systems, install the Birda CUDA release from [tphakala/birda](https://github.com/tphakala/birda), add `birda.exe` to PATH, install a model with `birda models install birdnet-v24`, then restart the dashboard. TensorRT can be enabled separately by copying the TensorRT 10 DLLs into the Birda installation folder. The Processing page can then run Birda with GPU, TensorRT, batch-size, BirdNET/Perch model, and BattyBirdNET region settings.
 
 ## Public Repository Notes
 

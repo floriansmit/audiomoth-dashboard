@@ -1763,8 +1763,8 @@ def render_processing_page(data_root, db_path):
 
     birda_model = st.text_input(
         "Birda model",
-        value="",
-        help="Leave empty for Birda's default model, or use names such as birdnet-v24, birdnet-v30, or perch-v2 after installing them with Birda.",
+        value="birdnet-v24",
+        help="Use an installed Birda model such as birdnet-v24, birdnet-v30, or perch-v2. Install models with `birda models install <model>`.",
     )
     birda_bat_region = st.text_input(
         "Birda bat region",
