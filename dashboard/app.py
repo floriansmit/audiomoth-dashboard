@@ -79,6 +79,13 @@ def ensure_local_data_folders(data_root):
     return datasets_dir
 
 
+def normalize_data_root(path):
+    resolved = Path(path).expanduser().resolve()
+    if resolved.name.lower() == "datasets":
+        return resolved.parent
+    return resolved
+
+
 def render_first_run_page(data_root, db_path):
     datasets_dir = ensure_local_data_folders(data_root)
     st.title(APP_TITLE)
@@ -1442,16 +1449,17 @@ def existing_dataset_folders(datasets_dir):
 
 def processing_folder_label(dataset_dir):
     audio_count = count_audio_files(dataset_dir / "audio")
+    birda_count = count_files_with_suffixes(dataset_dir / "birda", (".csv", ".json", ".parquet"))
     birdnet_count = count_files_with_suffixes(
         dataset_dir / "birdnet",
         (".BirdNET.selection.table.txt", ".BirdNET.selection.table.csv", ".selection.table.txt", ".selection.table.csv", ".csv", ".txt"),
     )
     batdetect_count = count_files_with_suffixes(dataset_dir / "batdetect2_outputs", (".csv", ".json"))
 
-    if audio_count and not birdnet_count and not batdetect_count:
+    if audio_count and not birda_count and not birdnet_count and not batdetect_count:
         status = "ready to analyze"
     elif audio_count:
-        status = f"{birdnet_count} BirdNET, {batdetect_count} BatDetect2 outputs"
+        status = f"{birda_count} Birda, {birdnet_count} BirdNET, {batdetect_count} BatDetect2 outputs"
     else:
         status = "no audio"
     return f"{dataset_dir.name} - {audio_count} audio - {status}"
@@ -1627,14 +1635,17 @@ def render_processing_page(data_root, db_path):
     st.subheader("1. Prepare Dataset Folder")
     st.caption("Create or select a dataset folder. Audio will be stored in that dataset's `audio` folder; analyzer outputs go to `birda`, `birdnet`, and `batdetect2_outputs`.")
     dataset_folders = existing_dataset_folders(datasets_dir)
-    dataset_options = ["Create new dataset"] + dataset_folders
+    dataset_folder_lookup = {path.name: path for path in dataset_folders}
+    dataset_options = ["Create new dataset"] + list(dataset_folder_lookup)
     selected_dataset_option = st.selectbox(
         "Dataset folder",
         dataset_options,
-        format_func=lambda option: option if isinstance(option, str) else processing_folder_label(option),
+        format_func=lambda option: option
+        if option == "Create new dataset"
+        else processing_folder_label(dataset_folder_lookup[option]),
     )
-    if isinstance(selected_dataset_option, Path):
-        dataset_name = selected_dataset_option.name
+    if selected_dataset_option != "Create new dataset":
+        dataset_name = selected_dataset_option
         st.text_input("Dataset folder name", value=dataset_name, disabled=True)
     else:
         dataset_name = st.text_input("Dataset folder name", value="11_new_dataset")
@@ -2005,12 +2016,15 @@ with st.sidebar:
         "Database path",
         value=os.environ.get("AUDIOMOTH_DB", str(DEFAULT_DB_PATH)),
     )
-    data_root = Path(
+    raw_data_root = Path(
         st.text_input(
             "External data root",
             value=os.environ.get("AUDIOMOTH_DATA_ROOT", str(PROJECT_ROOT)),
         )
-    ).expanduser().resolve()
+    )
+    data_root = normalize_data_root(raw_data_root)
+    if raw_data_root.expanduser().resolve() != data_root:
+        st.caption(f"Using data root: {data_root}")
     ensure_local_data_folders(data_root)
     view_mode = st.radio("View", ["Dashboard", "Processing", "Bird highlights", "Bat highlights"])
 
