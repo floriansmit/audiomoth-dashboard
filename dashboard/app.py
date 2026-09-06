@@ -1047,6 +1047,7 @@ def without_managed_birda_args(args):
         "--bat",
         "--gpu",
         "--cpu",
+        "--tensorrt",
         "--force",
     }
     managed_prefixes = tuple(f"{arg}=" for arg in managed_args if arg.startswith("--"))
@@ -1057,7 +1058,7 @@ def without_managed_birda_args(args):
             skip_next = False
             continue
         if arg in managed_args:
-            if arg not in {"--gpu", "--cpu", "--force"}:
+            if arg not in {"--gpu", "--cpu", "--tensorrt", "--force"}:
                 skip_next = True
             continue
         if arg.startswith(managed_prefixes):
@@ -1750,7 +1751,11 @@ def render_processing_page(data_root, db_path):
     with birda_cols[0]:
         birda_mode = st.selectbox("Birda analysis", ["Birds", "Bats"], help="Birds uses a BirdNET/Perch-style model. Bats uses Birda's BattyBirdNET mode.")
     with birda_cols[1]:
-        birda_device = st.selectbox("Device", ["Auto", "GPU", "CPU"], help="GPU uses CUDA when the installed Birda build supports it.")
+        birda_device = st.selectbox(
+            "Device",
+            ["Auto", "GPU", "TensorRT", "CPU"],
+            help="GPU uses CUDA. TensorRT is fastest when its DLLs are copied into the Birda installation folder.",
+        )
     with birda_cols[2]:
         birda_confidence = st.number_input("Birda minimum confidence", min_value=0.01, max_value=0.99, value=0.30, step=0.05)
     with birda_cols[3]:
@@ -1797,6 +1802,8 @@ def render_processing_page(data_root, db_path):
         ]
         if birda_device == "GPU":
             command.append("--gpu")
+        elif birda_device == "TensorRT":
+            command.append("--tensorrt")
         elif birda_device == "CPU":
             command.append("--cpu")
         if birda_model.strip():
