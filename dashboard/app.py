@@ -1646,7 +1646,17 @@ def merge_clip_groups(detections, pad_seconds):
     return groups
 
 
-def create_detection_clips(detections, data_root, dataset_dir, min_confidence, pad_seconds, max_clips, overwrite=False):
+def create_detection_clips(
+    detections,
+    data_root,
+    dataset_dir,
+    min_confidence,
+    pad_seconds,
+    max_clips,
+    overwrite=False,
+    progress_bar=None,
+    status_box=None,
+):
     clips_dir = dataset_dir / "clips"
     clips_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = clips_dir / "clips_manifest.csv"
@@ -1660,6 +1670,7 @@ def create_detection_clips(detections, data_root, dataset_dir, min_confidence, p
     clip_groups = merge_clip_groups(selected, float(pad_seconds))
     if max_clips:
         clip_groups = clip_groups[: int(max_clips)]
+    total_groups = len(clip_groups)
 
     manifest_rows = []
     if manifest_path.exists() and not overwrite:
@@ -1671,9 +1682,26 @@ def create_detection_clips(detections, data_root, dataset_dir, min_confidence, p
     created = 0
     skipped = 0
     failed = 0
-    for group in clip_groups:
+    started = time.time()
+    for index, group in enumerate(clip_groups, start=1):
         rows = group["rows"]
         rel_audio = group["relative_audio_path"]
+        elapsed = time.time() - started
+        eta = None
+        if index > 1:
+            eta = ((total_groups - index + 1) * elapsed) / (index - 1)
+        if progress_bar is not None:
+            progress_bar.progress(
+                index / total_groups if total_groups else 0.0,
+                text=f"Creating clips: {index:,}/{total_groups:,}",
+            )
+        if status_box is not None:
+            status_box.info(
+                f"Current source: {Path(str(rel_audio)).name}\n\n"
+                f"Created: {created:,} | Skipped: {skipped:,} | Failed: {failed:,}\n\n"
+                f"Elapsed: {format_seconds(elapsed)} | Remaining: {format_seconds(eta)}"
+            )
+
         source_path = Path(rel_audio)
         if not source_path.is_absolute():
             source_path = data_root / source_path
@@ -1732,6 +1760,11 @@ def create_detection_clips(detections, data_root, dataset_dir, min_confidence, p
         manifest_df = pd.DataFrame(manifest_rows).drop_duplicates(subset=["clip_file"], keep="last")
         manifest_df.to_csv(manifest_path, index=False)
 
+    if progress_bar is not None:
+        progress_bar.progress(1.0, text=f"Creating clips: {total_groups:,}/{total_groups:,}")
+    if status_box is not None:
+        status_box.success(f"Clip export finished. Created {created:,}, skipped {skipped:,}, failed {failed:,}.")
+
     return {"created": created, "skipped": skipped, "failed": failed, "manifest": manifest_path}
 
 
@@ -1777,6 +1810,8 @@ def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
     st.caption(f"This would create/update up to {clip_count:,} merged clips from {len(clip_df):,} detections.")
 
     if st.button("Create detection clips"):
+        progress_bar = st.progress(0.0, text="Creating clips: starting...")
+        status_box = st.empty()
         with st.spinner("Creating clipped playback WAVs..."):
             result = create_detection_clips(
                 clip_df,
@@ -1786,6 +1821,8 @@ def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
                 float(pad_seconds),
                 int(max_clips) if max_clips else None,
                 overwrite=overwrite,
+                progress_bar=progress_bar,
+                status_box=status_box,
             )
         st.success(f"Clip export complete: created {result['created']}, skipped {result['skipped']}, failed {result['failed']}.")
         st.caption(f"Manifest: {result['manifest']}")
