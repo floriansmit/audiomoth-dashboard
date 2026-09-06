@@ -875,6 +875,17 @@ def wikipedia_species_image(species_name):
     return profile.get("image_url") if profile else None
 
 
+def checkbox_selection(label, options, default_options, key_prefix):
+    selected = []
+    st.caption(label)
+    defaults = set(default_options)
+    for index, option in enumerate(options):
+        option_key = re.sub(r"[^A-Za-z0-9_]+", "_", str(option))
+        if st.checkbox(str(option), value=option in defaults, key=f"{key_prefix}_{index}_{option_key}"):
+            selected.append(option)
+    return selected
+
+
 def render_highlight_scope_selector(datasets, dataset_labels, selected_dataset_id, gallery_type):
     scope_key = f"{gallery_type}_highlight_scope"
     selected_key = f"{gallery_type}_highlight_selected"
@@ -890,11 +901,11 @@ def render_highlight_scope_selector(datasets, dataset_labels, selected_dataset_i
 
         chosen_dataset_ids = []
         if scope == "Selected datasets":
-            chosen_labels = st.multiselect(
+            chosen_labels = checkbox_selection(
                 "Datasets",
                 list(dataset_labels.keys()),
-                default=[label for label, dataset_id in dataset_labels.items() if dataset_id == selected_dataset_id],
-                key=f"{gallery_type}_highlight_dataset_multiselect",
+                [label for label, dataset_id in dataset_labels.items() if dataset_id == selected_dataset_id],
+                f"{gallery_type}_highlight_dataset",
             )
             chosen_dataset_ids = [dataset_labels[label] for label in chosen_labels]
 
@@ -1749,7 +1760,7 @@ def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
     detectors = sorted(detections["Detector"].fillna("birdnet").astype(str).unique())
     dataset_summary = ", ".join(str(dataset_id) for dataset_id in dataset_ids)
     st.caption(f"Using detections from database dataset(s): {dataset_summary}")
-    selected_detectors = st.multiselect("Detectors to clip", detectors, default=detectors, key="clip_detectors")
+    selected_detectors = checkbox_selection("Detectors to clip", detectors, detectors, "clip_detector")
     clip_cols = st.columns(4)
     with clip_cols[0]:
         min_confidence = st.number_input("Minimum confidence", min_value=0.01, max_value=0.99, value=0.50, step=0.05, key="clip_min_confidence")
