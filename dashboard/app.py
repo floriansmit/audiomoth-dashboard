@@ -636,6 +636,111 @@ def resolve_audio_path(row, data_root):
     return candidates[-1] if candidates else None
 
 
+def normalized_audio_reference(value, data_root):
+    if pd.isna(value) or not str(value).strip():
+        return ""
+    path = Path(str(value))
+    if not path.is_absolute():
+        path = data_root / path
+    return str(path.resolve(strict=False)).replace("\\", "/").casefold()
+
+
+def clip_manifest_candidates(row, data_root):
+    candidates = []
+    for column in ("relative_audio_path", "BeginPath"):
+        value = row.get(column)
+        if pd.isna(value) or not str(value).strip():
+            continue
+        path = Path(str(value))
+        if not path.is_absolute():
+            path = data_root / path
+        for parent in path.parents:
+            if parent.name.casefold() == "audio":
+                candidates.append(parent.parent / "clips" / "clips_manifest.csv")
+                break
+
+    unique = []
+    seen = set()
+    for path in candidates:
+        key = str(path.resolve(strict=False)).casefold()
+        if key not in seen:
+            unique.append(path)
+            seen.add(key)
+    return unique
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_clip_manifest(path, mtime_ns):
+    manifest = pd.read_csv(path)
+    for column in ("clip_start_seconds", "clip_end_seconds", "clip_duration_seconds"):
+        if column in manifest.columns:
+            manifest[column] = pd.to_numeric(manifest[column], errors="coerce")
+    return manifest
+
+
+def resolve_playback_audio(row, data_root, margin_seconds=3.0):
+    begin_time = float(row["BeginTime"])
+    end_time = float(row["EndTime"])
+    desired_start = max(0.0, begin_time - margin_seconds)
+    desired_end = end_time + margin_seconds
+    source_references = {
+        normalized_audio_reference(row.get(column), data_root)
+        for column in ("relative_audio_path", "BeginPath")
+    }
+    source_references.discard("")
+
+    matches = []
+    for manifest_path in clip_manifest_candidates(row, data_root):
+        if not manifest_path.exists():
+            continue
+        try:
+            manifest = cached_clip_manifest(str(manifest_path), manifest_path.stat().st_mtime_ns)
+        except Exception:
+            continue
+        required = {"clip_file", "source_audio_path", "clip_start_seconds", "clip_end_seconds"}
+        if not required.issubset(manifest.columns):
+            continue
+
+        source_matches = manifest["source_audio_path"].apply(
+            lambda value: normalized_audio_reference(value, data_root) in source_references
+        )
+        containing = manifest[
+            source_matches
+            & (manifest["clip_start_seconds"] <= begin_time + 1e-3)
+            & (manifest["clip_end_seconds"] >= end_time - 1e-3)
+        ].copy()
+        if containing.empty:
+            continue
+        containing["_duration"] = containing["clip_end_seconds"] - containing["clip_start_seconds"]
+        matches.extend((manifest_path, clip_row) for _, clip_row in containing.iterrows())
+
+    if matches:
+        manifest_path, clip_row = min(matches, key=lambda item: float(item[1]["_duration"]))
+        dataset_dir = manifest_path.parent.parent
+        clip_path = Path(str(clip_row["clip_file"]))
+        if not clip_path.is_absolute():
+            clip_path = dataset_dir / clip_path
+        if clip_path.exists():
+            clip_start = float(clip_row["clip_start_seconds"])
+            clip_end = float(clip_row["clip_end_seconds"])
+            available_start = max(desired_start, clip_start)
+            available_end = min(desired_end, clip_end)
+            return {
+                "path": clip_path.resolve(),
+                "start": max(0.0, available_start - clip_start),
+                "duration": max(0.5, available_end - available_start),
+                "is_clip": True,
+            }
+
+    wav_path = resolve_audio_path(row, data_root)
+    return {
+        "path": wav_path,
+        "start": desired_start,
+        "duration": max(0.5, desired_end - desired_start),
+        "is_clip": False,
+    }
+
+
 def load_audio_segment(wav_path, start, duration):
     try:
         with sf.SoundFile(str(wav_path)) as audio_file:
@@ -670,19 +775,15 @@ def quality_candidates(species_df, data_root, max_candidates=30):
     rows = []
 
     for _, row in candidates.iterrows():
-        wav_path = resolve_audio_path(row, data_root)
+        playback = resolve_playback_audio(row, data_root)
+        wav_path = playback["path"]
         if wav_path is None or not wav_path.exists():
             continue
-
-        begin_time = float(row["BeginTime"])
-        end_time = float(row["EndTime"])
-        noise_start = max(0, begin_time - 3)
-        noise_duration = max(1.0, (end_time - begin_time) + 6)
 
         mean_dbfs = row.get("MeanDbfs")
         if pd.isna(mean_dbfs):
             try:
-                mean_dbfs = segment_dbfs(str(wav_path), noise_start, noise_duration)
+                mean_dbfs = segment_dbfs(str(wav_path), playback["start"], playback["duration"])
             except Exception:
                 mean_dbfs = np.nan
 
@@ -707,10 +808,10 @@ def quality_candidates(species_df, data_root, max_candidates=30):
 
 
 def render_audio_inspector(row, data_root, dataset_type, key_prefix):
-    wav_path = resolve_audio_path(row, data_root)
-    start = max(0, float(row["BeginTime"]) - 3)
-    end = float(row["EndTime"]) + 3
-    duration = max(0.5, end - start)
+    playback = resolve_playback_audio(row, data_root)
+    wav_path = playback["path"]
+    start = playback["start"]
+    duration = playback["duration"]
 
     if wav_path is None or not wav_path.exists():
         st.error(f"Audio file not found: {wav_path}")
@@ -740,6 +841,9 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix):
         buffer = io.BytesIO()
         sf.write(buffer, y, playback_sr, format="WAV")
         st.audio(buffer.getvalue(), format="audio/wav")
+
+        if playback["is_clip"]:
+            st.caption(f"Using generated clip: {wav_path.name}")
 
         if expansion_factor > 1:
             st.caption(
