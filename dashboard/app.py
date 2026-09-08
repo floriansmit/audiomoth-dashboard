@@ -351,6 +351,96 @@ def inject_design_system():
             [data-testid="stTabs"] [data-baseweb="tab-highlight"] {
                 display: none;
             }
+            .species-matrix-shell {
+                width: 100%;
+                overflow-x: auto;
+                border: 1px solid rgba(16, 24, 40, 0.10);
+                border-radius: 8px;
+                background: rgba(255, 255, 255, 0.96);
+            }
+            .species-matrix {
+                width: max-content;
+                min-width: 100%;
+                border-collapse: separate;
+                border-spacing: 3px;
+                padding: 0.35rem;
+            }
+            .species-matrix th {
+                height: 2.7rem;
+                padding: 0 0.45rem;
+                color: #526071;
+                background: #f5f7fb;
+                font-size: 0.75rem;
+                font-weight: 650;
+                white-space: nowrap;
+            }
+            .species-matrix .species-column {
+                position: sticky;
+                left: 0;
+                z-index: 2;
+                width: 250px;
+                min-width: 250px;
+                max-width: 250px;
+                background: #ffffff;
+                box-shadow: 5px 0 8px rgba(16, 24, 40, 0.05);
+            }
+            .species-matrix thead .species-column {
+                z-index: 3;
+                background: #f5f7fb;
+                text-align: left;
+            }
+            .species-matrix-species {
+                display: flex;
+                align-items: center;
+                gap: 0.65rem;
+                min-height: 42px;
+                color: #172033;
+                font-size: 0.88rem;
+                font-weight: 600;
+                line-height: 1.2;
+                text-align: left;
+                white-space: normal;
+            }
+            .species-matrix-photo,
+            .species-matrix-placeholder {
+                flex: 0 0 36px;
+                width: 36px;
+                height: 36px;
+                border-radius: 6px;
+                object-fit: cover;
+                background: #dbe4ee;
+            }
+            .species-matrix-placeholder {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                color: #526071;
+                font-size: 0.82rem;
+                font-weight: 700;
+            }
+            .species-matrix-count {
+                min-width: 42px;
+                height: 42px;
+                border-radius: 5px;
+                text-align: center;
+                font-size: 0.78rem;
+                font-weight: 700;
+            }
+            .species-matrix-legend {
+                display: flex;
+                align-items: center;
+                justify-content: flex-end;
+                gap: 0.5rem;
+                margin: 0.5rem 0 0.2rem;
+                color: #526071;
+                font-size: 0.75rem;
+            }
+            .species-matrix-gradient {
+                width: 170px;
+                height: 10px;
+                border-radius: 5px;
+                background: linear-gradient(90deg, #38bdf8, #22c55e, #fde047, #ef4444);
+            }
             h1, h2, h3 {
                 color: #172033;
                 letter-spacing: 0;
@@ -662,6 +752,7 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix):
         librosa.display.specshow(spectrum, sr=sr, x_axis="time", y_axis="log", ax=ax)
         ax.set_ylim([20, sr / 2])
         st.pyplot(fig)
+        plt.close(fig)
 
     except Exception as exc:
         st.exception(exc)
@@ -924,10 +1015,140 @@ def wikipedia_species_profile(species_name):
     }
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def wikipedia_species_image(species_name):
-    profile = wikipedia_species_profile(species_name)
-    return profile.get("image_url") if profile else None
+@st.cache_data(ttl=604800, show_spinner=False)
+def wikipedia_species_images(species_names):
+    """Fetch small species thumbnails in batches without loading full profiles."""
+    species_names = tuple(dict.fromkeys(str(name) for name in species_names if str(name).strip()))
+    lookup_titles = {
+        name: WIKIPEDIA_NAME_ALIASES.get(name.lower(), name)
+        for name in species_names
+    }
+    images = {name: None for name in species_names}
+
+    for start_index in range(0, len(species_names), 40):
+        batch_names = species_names[start_index : start_index + 40]
+        requested_titles = [lookup_titles[name] for name in batch_names]
+        try:
+            data = wikipedia_request(
+                {
+                    "action": "query",
+                    "format": "json",
+                    "titles": "|".join(requested_titles),
+                    "redirects": 1,
+                    "prop": "pageimages",
+                    "piprop": "thumbnail",
+                    "pithumbsize": 96,
+                }
+            )
+        except Exception:
+            continue
+
+        query = data.get("query", {})
+        title_changes = {}
+        for change in query.get("normalized", []) + query.get("redirects", []):
+            if change.get("from") and change.get("to"):
+                title_changes[str(change["from"]).casefold()] = str(change["to"])
+
+        pages_by_title = {
+            str(page.get("title", "")).casefold(): page
+            for page in query.get("pages", {}).values()
+        }
+
+        def resolved_title(title):
+            current = title
+            for _ in range(6):
+                replacement = title_changes.get(current.casefold())
+                if not replacement or replacement.casefold() == current.casefold():
+                    break
+                current = replacement
+            return current
+
+        for name in batch_names:
+            requested = lookup_titles[name]
+            page = pages_by_title.get(resolved_title(requested).casefold())
+            if page:
+                images[name] = page.get("thumbnail", {}).get("source")
+
+    return images
+
+
+def activity_cell_color(value, maximum):
+    if value <= 0 or maximum <= 0:
+        return "#edf2f7", "#8a96a5"
+
+    if maximum <= 1:
+        position = 0.0
+    else:
+        position = (math.log1p(value) - math.log(2)) / (math.log1p(maximum) - math.log(2))
+        position = max(0.0, min(1.0, position))
+
+    stops = [
+        (0.0, (56, 189, 248)),
+        (0.38, (34, 197, 94)),
+        (0.68, (253, 224, 71)),
+        (1.0, (239, 68, 68)),
+    ]
+    for (left_position, left_color), (right_position, right_color) in zip(stops, stops[1:]):
+        if position <= right_position:
+            fraction = (position - left_position) / (right_position - left_position)
+            rgb = tuple(
+                round(left + (right - left) * fraction)
+                for left, right in zip(left_color, right_color)
+            )
+            break
+    else:
+        rgb = stops[-1][1]
+
+    text_color = "#ffffff" if position >= 0.9 else "#102033"
+    return f"rgb({rgb[0]}, {rgb[1]}, {rgb[2]})", text_color
+
+
+def render_occurrence_matrix(occurrence_matrix, time_axis_label):
+    species_names = tuple(str(name) for name in occurrence_matrix.index)
+    image_urls = wikipedia_species_images(species_names)
+    maximum = int(occurrence_matrix.to_numpy().max()) if not occurrence_matrix.empty else 0
+
+    header_cells = "".join(
+        f'<th title="{html.escape(str(label), quote=True)}">{html.escape(str(label))}</th>'
+        for label in occurrence_matrix.columns
+    )
+    rows = []
+    for species, values in occurrence_matrix.iterrows():
+        safe_species = html.escape(str(species))
+        image_url = image_urls.get(str(species))
+        if image_url:
+            image_html = (
+                f'<img class="species-matrix-photo" src="{html.escape(image_url, quote=True)}" '
+                f'alt="{safe_species}" loading="lazy">'
+            )
+        else:
+            initial = html.escape(str(species).strip()[:1].upper() or "?")
+            image_html = f'<span class="species-matrix-placeholder">{initial}</span>'
+
+        count_cells = []
+        for value in values:
+            count = int(value)
+            background, foreground = activity_cell_color(count, maximum)
+            label = str(count) if count else ""
+            count_cells.append(
+                f'<td class="species-matrix-count" style="background:{background};color:{foreground}" '
+                f'title="{safe_species}: {count} detections">{label}</td>'
+            )
+
+        rows.append(
+            '<tr><td class="species-column"><div class="species-matrix-species">'
+            f'{image_html}<span>{safe_species}</span></div></td>{"".join(count_cells)}</tr>'
+        )
+
+    matrix_html = (
+        '<div class="species-matrix-legend"><span>Fewer</span>'
+        '<span class="species-matrix-gradient"></span><span>More detections</span></div>'
+        '<div class="species-matrix-shell"><table class="species-matrix">'
+        f'<thead><tr><th class="species-column">Species</th>{header_cells}</tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table></div>'
+        f'<div class="species-matrix-legend"><span>Columns: {html.escape(time_axis_label)}</span></div>'
+    )
+    st.markdown(matrix_html, unsafe_allow_html=True)
 
 
 def checkbox_selection(label, options, default_options, key_prefix):
@@ -1024,16 +1245,19 @@ def render_gallery(gallery_df, data_root, gallery_type):
     max_candidates = st.slider("High-confidence candidates checked per species", 5, 50, 20, step=5)
 
     selected_species = species_counts.head(max_species).index.tolist()
-    for species in selected_species:
+    gallery_progress = st.progress(0.0, text=f"Preparing spectrograms: 0 / {len(selected_species)}")
+    gallery_image_urls = wikipedia_species_images(tuple(selected_species))
+    for species_index, species in enumerate(selected_species, start=1):
+        gallery_progress.progress(
+            (species_index - 1) / len(selected_species),
+            text=f"Loading spectrogram {species_index} / {len(selected_species)}: {species}",
+        )
         species_key = re.sub(r"[^A-Za-z0-9_]+", "_", species)
         species_df = gallery_df[gallery_df["CommonName"] == species]
         with st.container(border=True):
             image_col, table_col = st.columns([1, 3])
             with image_col:
-                try:
-                    image_url = wikipedia_species_image(species)
-                except Exception:
-                    image_url = None
+                image_url = gallery_image_urls.get(species)
                 if image_url:
                     st.image(image_url, use_container_width=True)
                 st.subheader(species)
@@ -1071,21 +1295,18 @@ def render_gallery(gallery_df, data_root, gallery_type):
                     )
                     selected_rank = int(selected_choice.split(" | ")[0])
                     selected_row_index = best.loc[best["Rank"] == selected_rank, "RowIndex"].iloc[0]
-                    inspector_key = f"gallery_{gallery_type}_{species_key}_loaded_rank"
-                    if st.button(
-                        "Load audio and spectrogram",
-                        key=f"gallery_{gallery_type}_{species_key}_load_{selected_rank}",
-                    ):
-                        st.session_state[inspector_key] = selected_rank
-                    if st.session_state.get(inspector_key) == selected_rank:
-                        render_audio_inspector(
-                            species_df.loc[selected_row_index],
-                            data_root,
-                            gallery_type,
-                            key_prefix=f"gallery_{gallery_type}_{species_key}_{selected_rank}",
-                        )
-                    else:
-                        st.caption("Select a highlight, then load it when you want to play the audio.")
+                    render_audio_inspector(
+                        species_df.loc[selected_row_index],
+                        data_root,
+                        gallery_type,
+                        key_prefix=f"gallery_{gallery_type}_{species_key}_{selected_rank}",
+                    )
+        gallery_progress.progress(
+            species_index / len(selected_species),
+            text=f"Loaded spectrograms: {species_index} / {len(selected_species)}",
+        )
+
+    gallery_progress.progress(1.0, text=f"Spectrograms ready: {len(selected_species)} / {len(selected_species)}")
 
 
 def bird_highlight_filter(df):
@@ -2691,8 +2912,6 @@ with overview_tab:
     with metric_cols[2]:
         st.metric("Total observations", f"{len(df):,}")
 
-    render_detection_count_note()
-
     if not selected_points.empty:
         st.subheader("Location")
         map_style = st.radio("Map style", ["Satellite", "Standard"], horizontal=True, key="overview_map_style")
@@ -2715,10 +2934,11 @@ with overview_tab:
 
 with histogram_tab:
     st.header("Species Histogram")
+    render_detection_count_note()
     col1, col2 = st.columns([1, 2])
 
     with col1:
-        st.dataframe(species_counts, hide_index=True, use_container_width=True)
+        st.dataframe(species_counts, hide_index=True, use_container_width=True, height=800)
 
     with col2:
         fig = px.bar(
@@ -2730,7 +2950,7 @@ with histogram_tab:
             color="Common Name",
             color_discrete_sequence=px.colors.sequential.Viridis_r,
         )
-        fig.update_layout(showlegend=False, height=500)
+        fig.update_layout(showlegend=False, height=800)
         fig.update_xaxes(
             type="log",
             tickvals=[1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000],
@@ -2767,29 +2987,7 @@ with matrix_tab:
     ordered_time_labels = matrix_df[["TimeBin", "TimeLabel"]].drop_duplicates().sort_values("TimeBin")["TimeLabel"].tolist()
     occurrence_matrix = occurrence_matrix.reindex(columns=ordered_time_labels, fill_value=0)
 
-    matrix_height = max(420, min(1200, 26 * len(occurrence_matrix)))
-    matrix_fig = px.imshow(
-        occurrence_matrix,
-        labels={"x": matrix_settings["label"], "y": "Species", "color": "Detections"},
-        color_continuous_scale=[
-            [0.0, "#e8edf4"],
-            [0.25, "#cfeaf2"],
-            [0.55, "#73c8df"],
-            [0.8, "#1c95c9"],
-            [1.0, "#06649b"],
-        ],
-        aspect="auto",
-        text_auto=len(occurrence_matrix.columns) <= 60,
-    )
-    matrix_fig.update_layout(
-        height=matrix_height,
-        margin=dict(l=10, r=10, t=20, b=10),
-        paper_bgcolor="rgba(255,255,255,0)",
-        plot_bgcolor="rgba(255,255,255,0)",
-    )
-    matrix_fig.update_traces(xgap=2, ygap=2)
-    matrix_fig.update_xaxes(side="top")
-    st.plotly_chart(matrix_fig, use_container_width=True)
+    render_occurrence_matrix(occurrence_matrix, matrix_settings["label"])
 
 with species_tab:
     st.header("Species Selection")
