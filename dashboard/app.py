@@ -2834,38 +2834,36 @@ def render_processing_page(data_root, db_path):
     manifest_path = data_root / "datasets" / "datasets_manifest.csv"
     resolved_db_path = resolve_db_path(db_path, data_root)
 
-    st.subheader("1. Prepare Dataset Folder")
-    st.caption("Create or select a dataset folder. Audio will be stored in that dataset's `audio` folder; analyzer outputs go to `birda`, `birdnet`, and `batdetect2_outputs`.")
-    dataset_folders = existing_dataset_folders(datasets_dir)
-    create_dataset_label = "Create new dataset"
-    dataset_labels = {path.name: processing_folder_label(path) for path in dataset_folders}
-    dataset_options = [create_dataset_label] + list(dataset_labels)
-    saved_dataset_selection = st.session_state.get("processing_dataset_folder")
-    if saved_dataset_selection not in dataset_options:
-        st.session_state["processing_dataset_folder"] = create_dataset_label
-    selected_dataset_name = st.selectbox(
-        "Dataset folder",
-        dataset_options,
-        format_func=lambda value: dataset_labels.get(value, value),
-        key="processing_dataset_folder",
+    project_tab, import_tab, analyzers_tab, database_tab, clips_tab = st.tabs(
+        ["Project", "Import Audio", "Analyzers", "Database", "Playback Clips"]
     )
-    if selected_dataset_name != create_dataset_label:
-        dataset_name = selected_dataset_name
-        st.text_input("Dataset folder name", value=dataset_name, disabled=True)
-    else:
-        dataset_name = st.text_input("Dataset folder name", value="11_new_dataset")
+
+    with project_tab:
+        st.subheader("Project Folder")
+        st.caption("Create or select a dataset folder. Audio is stored in `audio`; analyzer outputs use `birda`, `birdnet`, and `batdetect2_outputs`.")
+        dataset_folders = existing_dataset_folders(datasets_dir)
+        create_dataset_label = "Create new dataset"
+        dataset_labels = {path.name: processing_folder_label(path) for path in dataset_folders}
+        dataset_options = [create_dataset_label] + list(dataset_labels)
+        saved_dataset_selection = st.session_state.get("processing_dataset_folder")
+        if saved_dataset_selection not in dataset_options:
+            st.session_state["processing_dataset_folder"] = create_dataset_label
+        selected_dataset_name = st.selectbox(
+            "Dataset folder",
+            dataset_options,
+            format_func=lambda value: dataset_labels.get(value, value),
+            key="processing_dataset_folder",
+        )
+        if selected_dataset_name != create_dataset_label:
+            dataset_name = selected_dataset_name
+            st.text_input("Dataset folder name", value=dataset_name, disabled=True)
+        else:
+            dataset_name = st.text_input("Dataset folder name", value="11_new_dataset")
     dataset_dir = datasets_dir / dataset_name
     dataset_audio_dir = dataset_dir / "audio"
     birdnet_output_dir = dataset_dir / "birdnet"
     batdetect_output_dir = dataset_dir / "batdetect2_outputs"
     birda_output_dir = dataset_dir / "birda"
-
-    if st.button("Create dataset folders"):
-        dataset_audio_dir.mkdir(parents=True, exist_ok=True)
-        birda_output_dir.mkdir(parents=True, exist_ok=True)
-        birdnet_output_dir.mkdir(parents=True, exist_ok=True)
-        batdetect_output_dir.mkdir(parents=True, exist_ok=True)
-        st.success(f"Created folder structure: {dataset_dir}")
 
     target_count = count_audio_files(dataset_audio_dir)
     birdnet_output_count = count_files_with_suffixes(
@@ -2874,194 +2872,207 @@ def render_processing_page(data_root, db_path):
     )
     batdetect_output_count = count_files_with_suffixes(batdetect_output_dir, (".csv", ".json"))
     birda_output_count = count_files_with_suffixes(birda_output_dir, (".csv", ".json", ".parquet"))
-    st.caption(f"Dataset audio folder: {dataset_audio_dir}")
-    st.caption(f"Audio files already in dataset: {target_count}")
-    st.caption(f"Birda output files: {birda_output_count}")
-    st.caption(f"BirdNET output files: {birdnet_output_count}")
-    st.caption(f"BatDetect2 output files: {batdetect_output_count}")
-    if target_count and not birdnet_output_count and not batdetect_output_count and not birda_output_count:
-        st.success("This dataset has audio and no analyzer outputs yet. It is ready to analyze.")
-    elif target_count:
-        st.info("This dataset already has audio and some analyzer outputs.")
-    if st.button("Open dataset audio folder in Explorer"):
-        dataset_audio_dir.mkdir(parents=True, exist_ok=True)
-        subprocess.Popen(["explorer", str(dataset_audio_dir)])
+    with project_tab:
+        if st.button("Create dataset folders"):
+            dataset_audio_dir.mkdir(parents=True, exist_ok=True)
+            birda_output_dir.mkdir(parents=True, exist_ok=True)
+            birdnet_output_dir.mkdir(parents=True, exist_ok=True)
+            batdetect_output_dir.mkdir(parents=True, exist_ok=True)
+            st.success(f"Created folder structure: {dataset_dir}")
 
-    st.subheader("2. Import Audio Files")
-    st.caption("Browse to the folder where the WAV/FLAC/MP3 files currently live, then copy them into the dataset audio folder.")
-    default_source_audio = dataset_audio_dir if dataset_audio_dir.exists() else datasets_dir
-    selected_source_path = folder_picker("Source audio folder", default_source_audio, "processing_source_audio")
-    source_audio_dir = resolve_selected_audio_dir(selected_source_path)
-    if source_audio_dir != selected_source_path:
-        st.info(f"Using nested source audio folder: {source_audio_dir}")
-
-    source_count = count_audio_files(source_audio_dir)
-    st.caption(f"Resolved source folder: {source_audio_dir}")
-    if source_audio_dir.exists():
-        st.caption(f"Audio files found in source: {source_count}")
-    else:
-        st.warning(f"Source audio folder does not exist: {source_audio_dir}")
-
-    overwrite_audio = st.checkbox("Overwrite existing audio files in dataset", value=False)
-    if st.button("Copy source audio to dataset"):
-        if not source_audio_dir.exists() or not source_audio_dir.is_dir():
-            st.error(f"Source audio folder not found: {source_audio_dir}")
-        elif source_audio_dir.resolve() == dataset_audio_dir.resolve():
-            st.info("Source and dataset audio folders are the same. Nothing to copy.")
-        else:
-            with st.spinner("Copying audio files into the dataset..."):
-                copied, skipped, total = copy_audio_files(source_audio_dir, dataset_audio_dir, overwrite=overwrite_audio)
-            st.success(f"Audio import complete: copied {copied}, skipped {skipped}, source files {total}.")
+        st.caption(f"Dataset audio folder: {dataset_audio_dir}")
+        status_cols = st.columns(4)
+        status_cols[0].metric("Audio files", f"{target_count:,}")
+        status_cols[1].metric("Birda outputs", f"{birda_output_count:,}")
+        status_cols[2].metric("BirdNET outputs", f"{birdnet_output_count:,}")
+        status_cols[3].metric("BatDetect2 outputs", f"{batdetect_output_count:,}")
+        if target_count and not birdnet_output_count and not batdetect_output_count and not birda_output_count:
+            st.success("This dataset has audio and no analyzer outputs yet. It is ready to analyze.")
+        elif target_count:
+            st.info("This dataset already has audio and some analyzer outputs.")
+        if st.button("Open dataset audio folder in Explorer"):
+            dataset_audio_dir.mkdir(parents=True, exist_ok=True)
+            subprocess.Popen(["explorer", str(dataset_audio_dir)])
 
     audio_dir = dataset_audio_dir
     audio_count = count_audio_files(audio_dir)
-    if audio_count == 0:
-        st.warning("The dataset audio folder is empty. Copy audio files before running analyzers.")
-    else:
-        st.success(f"Ready to analyze {audio_count} audio files from the dataset audio folder.")
+    with import_tab:
+        st.subheader("Import Audio Files")
+        st.caption("Browse to the folder where the WAV/FLAC/MP3 files currently live, then copy them into the dataset audio folder.")
+        default_source_audio = dataset_audio_dir if dataset_audio_dir.exists() else datasets_dir
+        selected_source_path = folder_picker("Source audio folder", default_source_audio, "processing_source_audio")
+        source_audio_dir = resolve_selected_audio_dir(selected_source_path)
+        if source_audio_dir != selected_source_path:
+            st.info(f"Using nested source audio folder: {source_audio_dir}")
 
-    st.subheader("3. Run Analyzers")
-    st.info(
-        "For best performance, use Birda when it is installed. It supports GPU acceleration, modern model management, "
-        "and skip-existing behavior. BirdNET Analyzer and BatDetect2 remain available as compatibility backends."
-    )
-
-    birdnet_lat, birdnet_lon = render_birdnet_location_picker()
-    dataset_location_name = st.text_input("Dataset location name", value=dataset_name)
-    if st.button("Save analyzer location to manifest and database"):
-        try:
-            updated_rows = save_dataset_location_to_manifest(
-                manifest_path,
-                data_root,
-                dataset_audio_dir,
-                dataset_location_name,
-                birdnet_lat,
-                birdnet_lon,
-            )
-            updated_db_rows = save_dataset_location_to_database(
-                resolved_db_path,
-                data_root,
-                dataset_audio_dir,
-                dataset_location_name,
-                birdnet_lat,
-                birdnet_lon,
-            )
-            st.success(
-                f"Saved location to {updated_rows} manifest row(s) and {updated_db_rows} database row(s). "
-                "Switch back to Dashboard or refresh to see the sidebar map."
-            )
-        except Exception as exc:
-            st.error(f"Could not save location: {exc}")
-    default_birdnet_date = first_recording_date(audio_dir)
-    birdnet_date = st.date_input(
-        "Analyzer week date",
-        value=default_birdnet_date,
-        help="Pick a representative recording date. The ISO week number is passed to BirdNET/Birda as week context.",
-    )
-    birdnet_week = int(birdnet_date.isocalendar().week)
-    st.caption(f"Analyzer week: {birdnet_week} from {birdnet_date:%Y-%m-%d}")
-
-    with st.container(border=True):
-        st.markdown("**Bird Detection**")
-        bird_backend = st.selectbox(
-            "Bird analyzer",
-            ["Birda", "BirdNET Analyzer"],
-            help="Birda is the recommended fast backend. BirdNET Analyzer is kept for compatibility with original BirdNET output.",
-        )
-        if bird_backend == "Birda":
-            render_birda_bird_runner(audio_dir, birda_output_dir, birdnet_lat, birdnet_lon, birdnet_week)
+        source_count = count_audio_files(source_audio_dir)
+        st.caption(f"Resolved source folder: {source_audio_dir}")
+        if source_audio_dir.exists():
+            st.caption(f"Audio files found in source: {source_count}")
         else:
-            render_birdnet_analyzer_runner(audio_dir, birdnet_output_dir, birdnet_lat, birdnet_lon, birdnet_week)
+            st.warning(f"Source audio folder does not exist: {source_audio_dir}")
 
-    with st.container(border=True):
-        st.markdown("**Bat Detection**")
-        bat_backend = st.selectbox(
-            "Bat analyzer",
-            ["BatDetect2"],
-            help="BatDetect2 output is stored separately in batdetect2_outputs.",
+        overwrite_audio = st.checkbox("Overwrite existing audio files in dataset", value=False)
+        if st.button("Copy source audio to dataset"):
+            if not source_audio_dir.exists() or not source_audio_dir.is_dir():
+                st.error(f"Source audio folder not found: {source_audio_dir}")
+            elif source_audio_dir.resolve() == dataset_audio_dir.resolve():
+                st.info("Source and dataset audio folders are the same. Nothing to copy.")
+            else:
+                with st.spinner("Copying audio files into the dataset..."):
+                    copied, skipped, total = copy_audio_files(source_audio_dir, dataset_audio_dir, overwrite=overwrite_audio)
+                st.success(f"Audio import complete: copied {copied}, skipped {skipped}, source files {total}.")
+
+        if audio_count == 0:
+            st.warning("The dataset audio folder is empty. Copy audio files before running analyzers.")
+        else:
+            st.success(f"Ready to analyze {audio_count} audio files from the dataset audio folder.")
+
+    with analyzers_tab:
+        st.subheader("Run Analyzers")
+        st.info(
+            "For best performance, use Birda when it is installed. It supports GPU acceleration, modern model management, "
+            "and skip-existing behavior. BirdNET Analyzer and BatDetect2 remain available as compatibility backends."
         )
-        if bat_backend == "BatDetect2":
-            render_batdetect_runner(audio_dir, batdetect_output_dir)
 
-    st.subheader("4. Update Manifest And Database")
-    st.info(
-        "After running an analyzer: first regenerate the manifest. "
-        "Then use Append for a brand-new dataset that has never been imported. "
-        "Use Rebuild listed datasets if you added files to, or re-ran outputs for, an existing dataset. "
-        "Use Replace DB from manifest when you want to remove old datasets that are no longer in the manifest."
-    )
+        birdnet_lat, birdnet_lon = render_birdnet_location_picker()
+        dataset_location_name = st.text_input("Dataset location name", value=dataset_name)
+        if st.button("Save analyzer location to manifest and database"):
+            try:
+                updated_rows = save_dataset_location_to_manifest(
+                    manifest_path,
+                    data_root,
+                    dataset_audio_dir,
+                    dataset_location_name,
+                    birdnet_lat,
+                    birdnet_lon,
+                )
+                updated_db_rows = save_dataset_location_to_database(
+                    resolved_db_path,
+                    data_root,
+                    dataset_audio_dir,
+                    dataset_location_name,
+                    birdnet_lat,
+                    birdnet_lon,
+                )
+                st.success(
+                    f"Saved location to {updated_rows} manifest row(s) and {updated_db_rows} database row(s). "
+                    "Switch back to Dashboard or refresh to see the sidebar map."
+                )
+            except Exception as exc:
+                st.error(f"Could not save location: {exc}")
+        default_birdnet_date = first_recording_date(audio_dir)
+        birdnet_date = st.date_input(
+            "Analyzer week date",
+            value=default_birdnet_date,
+            help="Pick a representative recording date. The ISO week number is passed to BirdNET/Birda as week context.",
+        )
+        birdnet_week = int(birdnet_date.isocalendar().week)
+        st.caption(f"Analyzer week: {birdnet_week} from {birdnet_date:%Y-%m-%d}")
 
-    action_cols = st.columns(4)
-    with action_cols[0]:
-        if st.button("Regenerate manifest"):
-            command = [
-                sys.executable,
-                str(SCRIPTS_DIR / "generate_manifest.py"),
-                "--data-root",
-                str(data_root),
-                "--manifest",
-                str(manifest_path),
-            ]
-            with st.spinner("Updating manifest..."):
-                returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
-            show_command_result(returncode, stdout, stderr)
+        with st.container(border=True):
+            st.markdown("**Bird Detection**")
+            bird_backend = st.selectbox(
+                "Bird analyzer",
+                ["Birda", "BirdNET Analyzer"],
+                help="Birda is the recommended fast backend. BirdNET Analyzer is kept for compatibility with original BirdNET output.",
+            )
+            if bird_backend == "Birda":
+                render_birda_bird_runner(audio_dir, birda_output_dir, birdnet_lat, birdnet_lon, birdnet_week)
+            else:
+                render_birdnet_analyzer_runner(audio_dir, birdnet_output_dir, birdnet_lat, birdnet_lon, birdnet_week)
 
-    with action_cols[1]:
-        if st.button("Append to database"):
-            command = [
-                sys.executable,
-                str(SCRIPTS_DIR / "build_db.py"),
-                "--data-root",
-                str(data_root),
-                "--manifest",
-                str(manifest_path),
-                "--db",
-                str(resolved_db_path),
-                "--append",
-            ]
-            with st.spinner("Appending detections and missing metrics..."):
-                returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
-            show_command_result(returncode, stdout, stderr)
+        with st.container(border=True):
+            st.markdown("**Bat Detection**")
+            bat_backend = st.selectbox(
+                "Bat analyzer",
+                ["BatDetect2"],
+                help="BatDetect2 output is stored separately in batdetect2_outputs.",
+            )
+            if bat_backend == "BatDetect2":
+                render_batdetect_runner(audio_dir, batdetect_output_dir)
 
-    with action_cols[2]:
-        if st.button("Rebuild listed datasets"):
-            command = [
-                sys.executable,
-                str(SCRIPTS_DIR / "build_db.py"),
-                "--data-root",
-                str(data_root),
-                "--manifest",
-                str(manifest_path),
-                "--db",
-                str(resolved_db_path),
-            ]
-            with st.spinner("Rebuilding datasets from manifest..."):
-                returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
-            show_command_result(returncode, stdout, stderr)
+    with database_tab:
+        st.subheader("Update Manifest And Database")
+        st.info(
+            "After running an analyzer: first regenerate the manifest. "
+            "Then use Append for a brand-new dataset that has never been imported. "
+            "Use Rebuild listed datasets if you added files to, or re-ran outputs for, an existing dataset. "
+            "Use Replace DB from manifest when you want to remove old datasets that are no longer in the manifest."
+        )
 
-    with action_cols[3]:
-        if st.button("Replace DB from manifest"):
-            command = [
-                sys.executable,
-                str(SCRIPTS_DIR / "build_db.py"),
-                "--data-root",
-                str(data_root),
-                "--manifest",
-                str(manifest_path),
-                "--db",
-                str(resolved_db_path),
-                "--replace-db",
-            ]
-            with st.spinner("Replacing database from manifest..."):
-                returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
-            show_command_result(returncode, stdout, stderr)
+        action_cols = st.columns(4)
+        with action_cols[0]:
+            if st.button("Regenerate manifest"):
+                command = [
+                    sys.executable,
+                    str(SCRIPTS_DIR / "generate_manifest.py"),
+                    "--data-root",
+                    str(data_root),
+                    "--manifest",
+                    str(manifest_path),
+                ]
+                with st.spinner("Updating manifest..."):
+                    returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
+                show_command_result(returncode, stdout, stderr)
 
-    st.subheader("5. Create Playback Clips")
-    st.info(
-        "Clips are made from database detections after analyzer import. Overlapping detections are merged into one WAV clip, "
-        "so the same moment is not saved repeatedly. Bird and bat detections that share this audio folder are clipped together. "
-        "Original WAVs are left untouched."
-    )
+        with action_cols[1]:
+            if st.button("Append to database"):
+                command = [
+                    sys.executable,
+                    str(SCRIPTS_DIR / "build_db.py"),
+                    "--data-root",
+                    str(data_root),
+                    "--manifest",
+                    str(manifest_path),
+                    "--db",
+                    str(resolved_db_path),
+                    "--append",
+                ]
+                with st.spinner("Appending detections and missing metrics..."):
+                    returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
+                show_command_result(returncode, stdout, stderr)
+
+        with action_cols[2]:
+            if st.button("Rebuild listed datasets"):
+                command = [
+                    sys.executable,
+                    str(SCRIPTS_DIR / "build_db.py"),
+                    "--data-root",
+                    str(data_root),
+                    "--manifest",
+                    str(manifest_path),
+                    "--db",
+                    str(resolved_db_path),
+                ]
+                with st.spinner("Rebuilding datasets from manifest..."):
+                    returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
+                show_command_result(returncode, stdout, stderr)
+
+        with action_cols[3]:
+            if st.button("Replace DB from manifest"):
+                command = [
+                    sys.executable,
+                    str(SCRIPTS_DIR / "build_db.py"),
+                    "--data-root",
+                    str(data_root),
+                    "--manifest",
+                    str(manifest_path),
+                    "--db",
+                    str(resolved_db_path),
+                    "--replace-db",
+                ]
+                with st.spinner("Replacing database from manifest..."):
+                    returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
+                show_command_result(returncode, stdout, stderr)
+
+        if manifest_path.exists():
+            st.subheader("Manifest Preview")
+            try:
+                st.dataframe(pd.read_csv(manifest_path), use_container_width=True)
+            except Exception as exc:
+                st.warning(f"Could not preview manifest: {exc}")
+
     clip_dataset_ids = []
     if manifest_path.exists():
         try:
@@ -3074,14 +3085,14 @@ def render_processing_page(data_root, db_path):
             st.warning(f"Could not read manifest for clip dataset choices: {exc}")
     if not clip_dataset_ids:
         clip_dataset_ids = [dataset_name]
-    render_clip_creator(data_root, resolved_db_path, clip_dataset_ids, dataset_dir)
-
-    if manifest_path.exists():
-        st.subheader("Manifest Preview")
-        try:
-            st.dataframe(pd.read_csv(manifest_path), use_container_width=True)
-        except Exception as exc:
-            st.warning(f"Could not preview manifest: {exc}")
+    with clips_tab:
+        st.subheader("Create Playback Clips")
+        st.info(
+            "Clips are made from database detections after analyzer import. Overlapping detections are merged into one WAV clip, "
+            "so the same moment is not saved repeatedly. Bird and bat detections that share this audio folder are clipped together. "
+            "Original WAVs are left untouched."
+        )
+        render_clip_creator(data_root, resolved_db_path, clip_dataset_ids, dataset_dir)
 
 
 st.set_page_config(page_title=APP_TITLE, page_icon="🎙️", layout="wide")
