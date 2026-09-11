@@ -139,7 +139,7 @@ datasets/
 
 Birda output should stay in `birda/`. BirdNET Analyzer output should stay in `birdnet/`. BatDetect2 output should stay in `batdetect2_outputs/`. This keeps detector provenance explicit in the database.
 
-Playback clips can be generated from the Processing page after the database has been updated. The clipper uses all database detections that share the selected dataset's `audio/` folder, so bird and bat detections protect the same original WAV files. Overlapping detection windows are merged into one clip, using a configurable confidence threshold and margin before/after each detection. Clips are written to `clips/` with a `clips_manifest.csv`; original WAV files are not deleted by the app.
+Playback clips can be generated from the Processing page after the database has been updated. The clipper uses all database detections that share the selected dataset's `audio/` folder, so bird and bat detections protect the same original WAV files. Quality clips must pass configurable confidence and mean-dBFS filters, and the best detections per species are ranked using both confidence and quietness. Overlapping windows are merged using the selected margin. A live estimate compares the projected quality-clip size with the source WAV collection before export. Clips are written to `clips/` with a `clips_manifest.csv`; original WAV files are not deleted by the app.
 
 See [docs/data-structure.md](docs/data-structure.md) for more detail.
 

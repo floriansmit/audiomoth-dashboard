@@ -2148,6 +2148,69 @@ def create_detection_clips(
     return {"created": created, "skipped": skipped, "failed": failed, "manifest": manifest_path}
 
 
+def select_quality_clip_detections(detections, detectors, min_confidence, max_mean_dbfs, per_species):
+    selected = detections[detections["Detector"].fillna("birdnet").astype(str).isin(detectors)].copy()
+    selected["Confidence"] = pd.to_numeric(selected["Confidence"], errors="coerce")
+    selected["MeanDbfs"] = pd.to_numeric(selected["MeanDbfs"], errors="coerce")
+    selected = selected.dropna(subset=["Confidence", "MeanDbfs", "CommonName"])
+    selected = selected[
+        (selected["Confidence"] >= float(min_confidence))
+        & (selected["MeanDbfs"] <= float(max_mean_dbfs))
+    ]
+    selected = selected.drop_duplicates(
+        subset=["Detector", "relative_audio_path", "CommonName", "BeginTime", "EndTime", "Confidence"]
+    )
+    if selected.empty:
+        return selected
+
+    selected["_confidence_rank"] = selected.groupby("CommonName")["Confidence"].rank(pct=True)
+    selected["_quiet_rank"] = (-selected["MeanDbfs"]).groupby(selected["CommonName"]).rank(pct=True)
+    selected["QualityScore"] = (0.70 * selected["_confidence_rank"]) + (0.30 * selected["_quiet_rank"])
+    selected = selected.sort_values(
+        ["CommonName", "QualityScore", "Confidence", "MeanDbfs"],
+        ascending=[True, False, False, True],
+    )
+    if per_species:
+        selected = selected.groupby("CommonName", group_keys=False).head(int(per_species))
+    return selected.drop(columns=["_confidence_rank", "_quiet_rank"])
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def source_audio_size(audio_dir):
+    audio_dir = Path(audio_dir)
+    return sum(
+        path.stat().st_size
+        for path in audio_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() == ".wav"
+    )
+
+
+def estimate_clip_export_size(clip_groups, data_root, max_clips=None):
+    groups = clip_groups[: int(max_clips)] if max_clips else clip_groups
+    estimated_bytes = 0.0
+    estimated_seconds = 0.0
+    readable_groups = 0
+    for group in groups:
+        source_path = Path(str(group["relative_audio_path"]))
+        if not source_path.is_absolute():
+            source_path = data_root / source_path
+        if not source_path.exists():
+            continue
+        try:
+            info = sf.info(str(source_path))
+            clip_start = max(0.0, min(float(group["start"]), info.duration))
+            clip_end = max(clip_start, min(float(group["end"]), info.duration))
+            clip_duration = clip_end - clip_start
+            if info.duration <= 0 or clip_duration <= 0:
+                continue
+            estimated_seconds += clip_duration
+            estimated_bytes += source_path.stat().st_size * (clip_duration / info.duration)
+            readable_groups += 1
+        except Exception:
+            continue
+    return estimated_bytes, estimated_seconds, readable_groups
+
+
 def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
     clips_dir = dataset_dir / "clips"
     existing_clips = count_files_with_suffixes(clips_dir, (".wav", ".WAV"))
@@ -2174,20 +2237,87 @@ def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
     dataset_summary = ", ".join(str(dataset_id) for dataset_id in dataset_ids)
     st.caption(f"Using detections from database dataset(s): {dataset_summary}")
     selected_detectors = checkbox_selection("Detectors to clip", detectors, detectors, "clip_detector")
-    clip_cols = st.columns(4)
+    st.caption(
+        "Quality clips must pass both filters. Mean dBFS measures the surrounding audio; "
+        "more-negative values indicate a quieter recording."
+    )
+    clip_cols = st.columns(3)
     with clip_cols[0]:
-        min_confidence = st.number_input("Minimum confidence", min_value=0.01, max_value=0.99, value=0.50, step=0.05, key="clip_min_confidence")
+        min_confidence = st.number_input(
+            "Minimum confidence",
+            min_value=0.01,
+            max_value=0.99,
+            value=0.20,
+            step=0.05,
+            key="clip_min_confidence",
+        )
     with clip_cols[1]:
-        pad_seconds = st.number_input("Margin before/after", min_value=0.0, max_value=30.0, value=3.0, step=1.0, key="clip_pad_seconds")
+        max_mean_dbfs = st.number_input(
+            "Maximum mean dBFS",
+            min_value=-100.0,
+            max_value=0.0,
+            value=-35.0,
+            step=1.0,
+            help="Only retain detections at or below this level. Lower values are quieter.",
+            key="clip_max_mean_dbfs",
+        )
     with clip_cols[2]:
-        max_clips = st.number_input("Maximum clips", min_value=0, max_value=100000, value=0, step=100, help="Use 0 for no limit.", key="clip_max_clips")
-    with clip_cols[3]:
-        overwrite = st.checkbox("Overwrite existing clips", value=False, key="clip_overwrite")
+        per_species = st.number_input(
+            "Best detections per species",
+            min_value=0,
+            max_value=1000,
+            value=5,
+            step=1,
+            help="Ranked using 70% confidence and 30% quietness. Use 0 for every detection passing both filters.",
+            key="clip_per_species",
+        )
 
-    clip_df = detections[detections["Detector"].fillna("birdnet").astype(str).isin(selected_detectors)]
-    clip_df = clip_df[clip_df["Confidence"] >= min_confidence]
-    clip_count = len(merge_clip_groups(clip_df, float(pad_seconds))) if not clip_df.empty else 0
-    st.caption(f"This would create/update up to {clip_count:,} merged clips from {len(clip_df):,} detections.")
+    output_cols = st.columns(3)
+    with output_cols[0]:
+        pad_seconds = st.number_input("Margin before/after", min_value=0.0, max_value=30.0, value=3.0, step=1.0, key="clip_pad_seconds")
+    with output_cols[1]:
+        max_clips = st.number_input("Maximum clips", min_value=0, max_value=100000, value=0, step=100, help="Use 0 for no limit.", key="clip_max_clips")
+    with output_cols[2]:
+        overwrite = st.checkbox("Overwrite matching clips", value=False, key="clip_overwrite")
+
+    missing_metrics = int(detections["MeanDbfs"].isna().sum())
+    if missing_metrics:
+        st.warning(
+            f"{missing_metrics:,} detections have no audio metric and cannot be quality-ranked. "
+            "Append or rebuild the database to compute their mean dBFS values."
+        )
+
+    clip_df = select_quality_clip_detections(
+        detections,
+        selected_detectors,
+        min_confidence,
+        max_mean_dbfs,
+        int(per_species) if per_species else None,
+    )
+    clip_groups = merge_clip_groups(clip_df, float(pad_seconds)) if not clip_df.empty else []
+    limited_groups = clip_groups[: int(max_clips)] if max_clips else clip_groups
+    species_count = clip_df["CommonName"].nunique() if not clip_df.empty else 0
+    st.caption(
+        f"This selection contains {len(clip_df):,} detections across {species_count:,} species "
+        f"and would create/update up to {len(limited_groups):,} merged clips."
+    )
+
+    projected_bytes, projected_seconds, readable_groups = estimate_clip_export_size(
+        clip_groups,
+        data_root,
+        int(max_clips) if max_clips else None,
+    )
+    source_bytes = source_audio_size(str(dataset_dir / "audio"))
+    reduction_percent = 100 * (1 - (projected_bytes / source_bytes)) if source_bytes else 0.0
+    estimate_cols = st.columns(3)
+    estimate_cols[0].metric("Source WAV collection", f"{source_bytes / (1024 ** 3):.2f} GB")
+    estimate_cols[1].metric(
+        "Estimated quality clips",
+        f"{projected_bytes / (1024 ** 3):.2f} GB",
+        help=f"Approximately {projected_seconds / 60:.1f} minutes across {readable_groups:,} readable clip groups.",
+    )
+    estimate_cols[2].metric("Estimated reduction", f"{max(0.0, reduction_percent):.1f}%")
+    st.caption("Estimate assumes a clean quality-only clip set; existing older clips remain on disk until removed separately.")
 
     if st.button("Create detection clips"):
         progress_bar = st.progress(0.0, text="Creating clips: starting...")
@@ -2614,15 +2744,19 @@ def render_processing_page(data_root, db_path):
     st.caption("Create or select a dataset folder. Audio will be stored in that dataset's `audio` folder; analyzer outputs go to `birda`, `birdnet`, and `batdetect2_outputs`.")
     dataset_folders = existing_dataset_folders(datasets_dir)
     create_dataset_label = "Create new dataset"
-    dataset_label_lookup = {processing_folder_label(path): path.name for path in dataset_folders}
-    dataset_options = [create_dataset_label] + list(dataset_label_lookup)
-    selected_dataset_label = st.selectbox(
+    dataset_labels = {path.name: processing_folder_label(path) for path in dataset_folders}
+    dataset_options = [create_dataset_label] + list(dataset_labels)
+    saved_dataset_selection = st.session_state.get("processing_dataset_folder")
+    if saved_dataset_selection not in dataset_options:
+        st.session_state["processing_dataset_folder"] = create_dataset_label
+    selected_dataset_name = st.selectbox(
         "Dataset folder",
         dataset_options,
+        format_func=lambda value: dataset_labels.get(value, value),
         key="processing_dataset_folder",
     )
-    if selected_dataset_label != create_dataset_label:
-        dataset_name = dataset_label_lookup[selected_dataset_label]
+    if selected_dataset_name != create_dataset_label:
+        dataset_name = selected_dataset_name
         st.text_input("Dataset folder name", value=dataset_name, disabled=True)
     else:
         dataset_name = st.text_input("Dataset folder name", value="11_new_dataset")
