@@ -2211,6 +2211,97 @@ def estimate_clip_export_size(clip_groups, data_root, max_clips=None):
     return estimated_bytes, estimated_seconds, readable_groups
 
 
+def render_clip_quality_plot(detections, detectors, min_confidence, max_mean_dbfs):
+    plot_df = detections[detections["Detector"].fillna("birdnet").astype(str).isin(detectors)].copy()
+    plot_df["Confidence"] = pd.to_numeric(plot_df["Confidence"], errors="coerce")
+    plot_df["MeanDbfs"] = pd.to_numeric(plot_df["MeanDbfs"], errors="coerce")
+    plot_df = plot_df.dropna(subset=["Confidence", "MeanDbfs"])
+    plot_df = plot_df.drop_duplicates(
+        subset=["Detector", "relative_audio_path", "CommonName", "BeginTime", "EndTime", "Confidence"]
+    )
+    if len(plot_df) < 2 or plot_df["Confidence"].nunique() < 2:
+        st.info("At least two distinct confidence values with audio metrics are needed for the quality plot.")
+        return
+
+    pearson = plot_df["Confidence"].corr(plot_df["MeanDbfs"], method="pearson")
+    spearman = plot_df["Confidence"].corr(plot_df["MeanDbfs"], method="spearman")
+    slope, intercept = np.polyfit(plot_df["Confidence"], plot_df["MeanDbfs"], 1)
+    line_x = np.linspace(plot_df["Confidence"].min(), plot_df["Confidence"].max(), 100)
+
+    bin_edges = np.linspace(plot_df["Confidence"].min(), plot_df["Confidence"].max(), 16)
+    plot_df["_confidence_bin"] = pd.cut(plot_df["Confidence"], bins=bin_edges, include_lowest=True)
+    binned = (
+        plot_df.groupby("_confidence_bin", observed=True)
+        .agg(Confidence=("Confidence", "median"), MeanDbfs=("MeanDbfs", "median"))
+        .dropna()
+    )
+
+    display_df = plot_df
+    if len(display_df) > 10000:
+        display_df = display_df.sample(10000, random_state=42)
+    fig = px.scatter(
+        display_df,
+        x="Confidence",
+        y="MeanDbfs",
+        color="Detector",
+        hover_data=["CommonName"],
+        labels={"MeanDbfs": "Mean level (dBFS)"},
+        render_mode="webgl",
+        opacity=0.35,
+        color_discrete_sequence=px.colors.qualitative.Safe,
+    )
+    fig.add_scatter(
+        x=line_x,
+        y=(slope * line_x) + intercept,
+        mode="lines",
+        name="Linear fit",
+        line={"color": "#202124", "width": 2},
+    )
+    fig.add_scatter(
+        x=binned["Confidence"],
+        y=binned["MeanDbfs"],
+        mode="lines+markers",
+        name="Binned median",
+        line={"color": "#e4572e", "width": 3},
+    )
+    fig.add_vline(x=float(min_confidence), line_dash="dash", line_color="#2a9d8f")
+    fig.add_hline(y=float(max_mean_dbfs), line_dash="dash", line_color="#2a9d8f")
+    fig.update_layout(height=500, margin={"l": 10, "r": 10, "t": 20, "b": 10})
+    st.plotly_chart(fig, use_container_width=True)
+
+    correlation_cols = st.columns(3)
+    correlation_cols[0].metric("Pearson correlation", f"{pearson:.3f}", help="Linear relationship; values near zero indicate little linear association.")
+    correlation_cols[1].metric("Spearman correlation", f"{spearman:.3f}", help="Monotonic relationship, including curved relationships.")
+    correlation_cols[2].metric("Linear R-squared", f"{pearson ** 2:.3f}")
+    detector_correlations = []
+    for detector, detector_df in plot_df.groupby("Detector"):
+        detector_pearson = detector_df["Confidence"].corr(detector_df["MeanDbfs"], method="pearson")
+        detector_spearman = detector_df["Confidence"].corr(detector_df["MeanDbfs"], method="spearman")
+        detector_correlations.append(
+            {
+                "Detector": detector,
+                "Detections": len(detector_df),
+                "Pearson": detector_pearson,
+                "Spearman": detector_spearman,
+                "Linear R-squared": detector_pearson ** 2,
+            }
+        )
+    st.dataframe(
+        pd.DataFrame(detector_correlations),
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Pearson": st.column_config.NumberColumn(format="%.3f"),
+            "Spearman": st.column_config.NumberColumn(format="%.3f"),
+            "Linear R-squared": st.column_config.NumberColumn(format="%.3f"),
+        },
+    )
+    st.caption(
+        "Dashed lines show the active confidence and dBFS filters. The orange binned median helps reveal curvature "
+        "that the straight linear fit may miss. Correlations are also reported per detector because analyzer behavior differs."
+    )
+
+
 def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
     clips_dir = dataset_dir / "clips"
     existing_clips = count_files_with_suffixes(clips_dir, (".wav", ".WAV"))
@@ -2279,6 +2370,9 @@ def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
         max_clips = st.number_input("Maximum clips", min_value=0, max_value=100000, value=0, step=100, help="Use 0 for no limit.", key="clip_max_clips")
     with output_cols[2]:
         overwrite = st.checkbox("Overwrite matching clips", value=False, key="clip_overwrite")
+
+    with st.expander("Confidence versus recording level", expanded=True):
+        render_clip_quality_plot(detections, selected_detectors, min_confidence, max_mean_dbfs)
 
     missing_metrics = int(detections["MeanDbfs"].isna().sum())
     if missing_metrics:
