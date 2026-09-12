@@ -1585,6 +1585,41 @@ def pending_analyzer_files(audio_dir, output_dir, analyzer):
     return pending
 
 
+@st.cache_data(ttl=10, show_spinner=False)
+def processing_dataset_inventory(dataset_dir_text):
+    dataset_dir = Path(dataset_dir_text)
+    audio_dir = dataset_dir / "audio"
+    audio_list = audio_files(audio_dir)
+    audio_keys = [path.stem.casefold() for path in audio_list]
+    output_dirs = {
+        "birda": dataset_dir / "birda",
+        "birdnet": dataset_dir / "birdnet",
+        "batdetect2": dataset_dir / "batdetect2_outputs",
+    }
+    output_keys = {
+        analyzer: analyzer_output_keys(output_dir, analyzer)
+        for analyzer, output_dir in output_dirs.items()
+    }
+    pending = {
+        analyzer: sum(1 for audio_key in audio_keys if audio_key not in output_keys[analyzer])
+        for analyzer in output_dirs
+    }
+    return {
+        "audio": len(audio_list),
+        "birda_pending": pending["birda"],
+        "birdnet_pending": pending["birdnet"],
+        "batdetect2_pending": pending["batdetect2"],
+        "birda_outputs": len(output_keys["birda"]),
+        "birdnet_outputs": len(output_keys["birdnet"]),
+        "batdetect2_outputs": len(output_keys["batdetect2"]),
+    }
+
+
+@st.cache_data(ttl=10, show_spinner=False)
+def cached_audio_count(audio_dir_text):
+    return count_audio_files(Path(audio_dir_text))
+
+
 def parse_birda_event(line):
     try:
         event = json.loads(line)
@@ -1848,8 +1883,9 @@ def run_monitored_command(command, cwd, label, audio_dir, output_dir, output_suf
 
 
 def render_birda_bird_runner(audio_dir, birda_output_dir, birdnet_lat, birdnet_lon, birdnet_week):
-    audio_total = count_audio_files(audio_dir)
-    pending_total = len(pending_analyzer_files(audio_dir, birda_output_dir, "birda"))
+    inventory = processing_dataset_inventory(str(audio_dir.parent.resolve()))
+    audio_total = inventory["audio"]
+    pending_total = inventory["birda_pending"]
     st.caption(f"New files not yet analyzed by Birda: {pending_total:,} of {audio_total:,}")
     birda_available = shutil.which("birda")
     birda_command = st.text_input("Birda command", value=birda_available or "birda", key="bird_birda_command")
@@ -1951,12 +1987,14 @@ def render_birda_bird_runner(audio_dir, birda_output_dir, birdnet_lat, birdnet_l
             birda_output_dir,
             (".csv", ".json", ".parquet"),
         )
+        processing_dataset_inventory.clear()
         show_command_result(returncode, stdout, stderr)
 
 
 def render_birdnet_analyzer_runner(audio_dir, birdnet_output_dir, birdnet_lat, birdnet_lon, birdnet_week):
-    audio_total = count_audio_files(audio_dir)
-    pending_total = len(pending_analyzer_files(audio_dir, birdnet_output_dir, "birdnet"))
+    inventory = processing_dataset_inventory(str(audio_dir.parent.resolve()))
+    audio_total = inventory["audio"]
+    pending_total = inventory["birdnet_pending"]
     st.caption(f"New files not yet analyzed by BirdNET Analyzer: {pending_total:,} of {audio_total:,}")
     birdnet_available = (
         shutil.which("birdnet-analyze")
@@ -2007,12 +2045,14 @@ def render_birdnet_analyzer_runner(audio_dir, birdnet_output_dir, birdnet_lat, b
                 ".txt",
             ),
         )
+        processing_dataset_inventory.clear()
         show_command_result(returncode, stdout, stderr)
 
 
 def render_batdetect_runner(audio_dir, batdetect_output_dir):
-    audio_total = count_audio_files(audio_dir)
-    pending_total = len(pending_analyzer_files(audio_dir, batdetect_output_dir, "batdetect2"))
+    inventory = processing_dataset_inventory(str(audio_dir.parent.resolve()))
+    audio_total = inventory["audio"]
+    pending_total = inventory["batdetect2_pending"]
     st.caption(f"New files not yet analyzed by BatDetect2: {pending_total:,} of {audio_total:,}")
     bat_cols = st.columns(2)
     with bat_cols[0]:
@@ -2054,6 +2094,7 @@ def render_batdetect_runner(audio_dir, batdetect_output_dir):
             batdetect_output_dir,
             (".csv", ".json"),
         )
+        processing_dataset_inventory.clear()
         show_command_result(returncode, stdout, stderr)
 
 
@@ -2550,7 +2591,7 @@ def render_birdnet_location_picker():
             if matches:
                 st.session_state["birdnet_location_matches"] = matches
                 set_birdnet_coordinates(matches[0]["lat"], matches[0]["lon"], refresh_widgets=True)
-                st.rerun()
+                st.rerun(scope="fragment")
             else:
                 st.warning("No matching location found.")
         except Exception as exc:
@@ -2565,7 +2606,7 @@ def render_birdnet_location_picker():
         )
         if st.button("Use selected result"):
             set_birdnet_coordinates(selected_match["lat"], selected_match["lon"], refresh_widgets=True)
-            st.rerun()
+            st.rerun(scope="fragment")
 
     location_version = st.session_state["birdnet_location_version"]
     lat_col, lon_col = st.columns(2)
@@ -2610,7 +2651,7 @@ def render_birdnet_location_picker():
             clicked_lon = float(clicked["lng"])
             if abs(clicked_lat - lat) > 1e-6 or abs(clicked_lon - lon) > 1e-6:
                 set_birdnet_coordinates(clicked_lat, clicked_lon, refresh_widgets=True)
-                st.rerun()
+                st.rerun(scope="fragment")
     else:
         st.info("Install `streamlit-folium` to enable the clickable map. Latitude and longitude boxes still work.")
 
@@ -2668,7 +2709,7 @@ def folder_picker(label, initial_path, key):
             selected = choose_folder_dialog(current_path)
             if selected:
                 update_folder_picker_path(key, selected)
-                st.rerun()
+                st.rerun(scope="fragment")
 
     with nav_cols[1]:
         if st.button("Open in Explorer", key=f"{key}_explorer"):
@@ -2678,7 +2719,7 @@ def folder_picker(label, initial_path, key):
     with nav_cols[2]:
         if st.button("Parent folder", key=f"{key}_parent"):
             update_folder_picker_path(key, current_path.parent)
-            st.rerun()
+            st.rerun(scope="fragment")
 
     return current_path
 
@@ -2715,15 +2756,14 @@ def existing_dataset_folders(datasets_dir):
 
 
 def processing_folder_label(dataset_dir):
-    audio_count = count_audio_files(dataset_dir / "audio")
+    inventory = processing_dataset_inventory(str(dataset_dir.resolve()))
+    audio_count = inventory["audio"]
     if not audio_count:
         return f"{dataset_dir.name} - no audio"
 
-    birda_pending = len(pending_analyzer_files(dataset_dir / "audio", dataset_dir / "birda", "birda"))
-    birdnet_pending = len(pending_analyzer_files(dataset_dir / "audio", dataset_dir / "birdnet", "birdnet"))
-    batdetect_pending = len(
-        pending_analyzer_files(dataset_dir / "audio", dataset_dir / "batdetect2_outputs", "batdetect2")
-    )
+    birda_pending = inventory["birda_pending"]
+    birdnet_pending = inventory["birdnet_pending"]
+    batdetect_pending = inventory["batdetect2_pending"]
     status = f"new: {birda_pending} Birda, {birdnet_pending} BirdNET, {batdetect_pending} BatDetect2"
     return f"{dataset_dir.name} - {audio_count} audio - {status}"
 
@@ -2927,6 +2967,7 @@ def load_dataset_location(manifest_path, db_path, data_root, dataset_audio_dir):
     return location_name, latitude, longitude
 
 
+@st.fragment
 def render_processing_page(data_root, db_path):
     st.header("Processing")
 
@@ -2975,22 +3016,21 @@ def render_processing_page(data_root, db_path):
     batdetect_output_dir = dataset_dir / "batdetect2_outputs"
     birda_output_dir = dataset_dir / "birda"
 
-    target_count = count_audio_files(dataset_audio_dir)
-    birdnet_output_count = count_files_with_suffixes(
-        birdnet_output_dir,
-        (".BirdNET.selection.table.txt", ".BirdNET.selection.table.csv", ".selection.table.txt", ".selection.table.csv", ".csv", ".txt"),
-    )
-    batdetect_output_count = count_files_with_suffixes(batdetect_output_dir, (".csv", ".json"))
-    birda_output_count = count_files_with_suffixes(birda_output_dir, (".csv", ".json", ".parquet"))
-    birda_pending_count = len(pending_analyzer_files(dataset_audio_dir, birda_output_dir, "birda"))
-    birdnet_pending_count = len(pending_analyzer_files(dataset_audio_dir, birdnet_output_dir, "birdnet"))
-    batdetect_pending_count = len(pending_analyzer_files(dataset_audio_dir, batdetect_output_dir, "batdetect2"))
+    inventory = processing_dataset_inventory(str(dataset_dir.resolve()))
+    target_count = inventory["audio"]
+    birdnet_output_count = inventory["birdnet_outputs"]
+    batdetect_output_count = inventory["batdetect2_outputs"]
+    birda_output_count = inventory["birda_outputs"]
+    birda_pending_count = inventory["birda_pending"]
+    birdnet_pending_count = inventory["birdnet_pending"]
+    batdetect_pending_count = inventory["batdetect2_pending"]
     with project_tab:
         if st.button("Create dataset folders"):
             dataset_audio_dir.mkdir(parents=True, exist_ok=True)
             birda_output_dir.mkdir(parents=True, exist_ok=True)
             birdnet_output_dir.mkdir(parents=True, exist_ok=True)
             batdetect_output_dir.mkdir(parents=True, exist_ok=True)
+            processing_dataset_inventory.clear()
             st.success(f"Created folder structure: {dataset_dir}")
 
         st.caption(f"Dataset audio folder: {dataset_audio_dir}")
@@ -3006,9 +3046,13 @@ def render_processing_page(data_root, db_path):
         if st.button("Open dataset audio folder in Explorer"):
             dataset_audio_dir.mkdir(parents=True, exist_ok=True)
             subprocess.Popen(["explorer", str(dataset_audio_dir)])
+        if st.button("Refresh file status"):
+            processing_dataset_inventory.clear()
+            cached_audio_count.clear()
+            st.rerun(scope="fragment")
 
     audio_dir = dataset_audio_dir
-    audio_count = count_audio_files(audio_dir)
+    audio_count = inventory["audio"]
     with import_tab:
         st.subheader("Import Audio Files")
         st.caption("Browse to the folder where the WAV/FLAC/MP3 files currently live, then copy them into the dataset audio folder.")
@@ -3018,7 +3062,7 @@ def render_processing_page(data_root, db_path):
         if source_audio_dir != selected_source_path:
             st.info(f"Using nested source audio folder: {source_audio_dir}")
 
-        source_count = count_audio_files(source_audio_dir)
+        source_count = cached_audio_count(str(source_audio_dir.resolve()))
         st.caption(f"Resolved source folder: {source_audio_dir}")
         if source_audio_dir.exists():
             st.caption(f"Audio files found in source: {source_count}")
@@ -3034,6 +3078,8 @@ def render_processing_page(data_root, db_path):
             else:
                 with st.spinner("Copying audio files into the dataset..."):
                     copied, skipped, total = copy_audio_files(source_audio_dir, dataset_audio_dir, overwrite=overwrite_audio)
+                processing_dataset_inventory.clear()
+                cached_audio_count.clear()
                 st.success(f"Audio import complete: copied {copied}, skipped {skipped}, source files {total}.")
 
         if audio_count == 0:
