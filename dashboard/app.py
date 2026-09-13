@@ -886,7 +886,7 @@ def bat_call_morphology(row):
     }
 
 
-def bat_sequence_context(row, context_df, source_start, duration):
+def bat_view_context(row, context_df, source_start, duration):
     if context_df is None or context_df.empty:
         return pd.DataFrame([row])
 
@@ -902,6 +902,11 @@ def bat_sequence_context(row, context_df, source_start, duration):
         (pd.to_numeric(candidates["EndTime"], errors="coerce") >= source_start)
         & (pd.to_numeric(candidates["BeginTime"], errors="coerce") <= source_end)
     ].copy()
+    return candidates.sort_values("BeginTime")
+
+
+def bat_sequence_context(row, context_df, source_start, duration):
+    candidates = bat_view_context(row, context_df, source_start, duration)
 
     selected_low = pd.to_numeric(pd.Series([row.get("LowFreqHz")]), errors="coerce").iloc[0]
     selected_high = pd.to_numeric(pd.Series([row.get("HighFreqHz")]), errors="coerce").iloc[0]
@@ -1035,7 +1040,9 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix, context_df=
         sequence_summary = None
         sequence_interpretation = None
         sequence_plot_label = None
+        sequence_species_colors = {}
         if morphology:
+            view_df = bat_view_context(row, context_df, playback["source_start"], duration)
             sequence_df = bat_sequence_context(row, context_df, playback["source_start"], duration)
             sequence_summary, sequence_interpretation, sequence_plot_label = bat_sequence_description(sequence_df)
 
@@ -1064,7 +1071,7 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix, context_df=
         spectrum = librosa.amplitude_to_db(np.abs(librosa.stft(y)), ref=np.max)
         if morphology:
             fig = plt.figure(figsize=(12, 5.8))
-            grid = fig.add_gridspec(2, 1, height_ratios=[0.9, 5], hspace=0.02)
+            grid = fig.add_gridspec(2, 1, height_ratios=[1.15, 5], hspace=0.02)
             annotation_ax = fig.add_subplot(grid[0])
             ax = fig.add_subplot(grid[1], sharex=annotation_ax)
             annotation_ax.set_xlim(0, duration)
@@ -1081,13 +1088,40 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix, context_df=
                 sequence_start = max(0.0, float(sequence_df["BeginTime"].min()) - playback["source_start"])
                 sequence_end = min(duration, float(sequence_df["EndTime"].max()) - playback["source_start"])
                 add_horizontal_brace(annotation_ax, sequence_start, sequence_end, sequence_plot_label)
+                species_names = sorted(view_df["CommonName"].fillna("Unclassified").astype(str).unique())
+                pulse_colors = ["#168aad", "#f4a261", "#52b788", "#9b5de5", "#e63946", "#6c757d"]
+                sequence_species_colors = {
+                    species: pulse_colors[index % len(pulse_colors)]
+                    for index, species in enumerate(species_names)
+                }
+                marker_levels = {
+                    species: 0.05 + (index % 4) * 0.075
+                    for index, species in enumerate(species_names)
+                }
+                for _, sequence_row in view_df.iterrows():
+                    pulse_x = (
+                        float(sequence_row["BeginTime"])
+                        + float(sequence_row["EndTime"])
+                    ) / 2 - playback["source_start"]
+                    pulse_species = str(sequence_row.get("CommonName") or "Unclassified")
+                    annotation_ax.scatter(
+                        pulse_x,
+                        marker_levels[pulse_species],
+                        marker="v",
+                        s=34,
+                        color=sequence_species_colors[pulse_species],
+                        edgecolor="white",
+                        linewidth=0.6,
+                        zorder=4,
+                    )
                 selected_x = (detection_start + detection_end) / 2
                 selected_y = (float(row["LowFreqHz"]) + float(row["HighFreqHz"])) / 2
                 label_x = min(max(selected_x + 0.65, 0.75), max(0.75, duration - 0.2))
+                selected_marker_y = marker_levels.get(str(row.get("CommonName") or "Unclassified"), 0.05)
                 annotation_ax.annotate(
                     "Selected pulse",
-                    xy=(selected_x, 0.02),
-                    xytext=(label_x, 0.20),
+                    xy=(selected_x, selected_marker_y),
+                    xytext=(label_x, 0.35),
                     ha="center",
                     color="white",
                     fontsize=9,
@@ -1115,6 +1149,18 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix, context_df=
         plt.close(fig)
 
         if morphology:
+            if sequence_species_colors:
+                legend_items = "".join(
+                    '<span style="display:inline-flex;align-items:center;gap:0.35rem;margin-right:1rem;">'
+                    f'<span style="width:0.65rem;height:0.65rem;background:{color};border-radius:50%;"></span>'
+                    f"{html.escape(species)}</span>"
+                    for species, color in sequence_species_colors.items()
+                )
+                st.markdown(
+                    '<div style="font-size:0.85rem;color:#1f2937;margin:0.1rem 0 0.75rem 0;">'
+                    f"<strong>BatDetect2 pulse predictions:</strong> {legend_items}</div>",
+                    unsafe_allow_html=True,
+                )
             st.markdown(f"**Visible call sequence:** {sequence_summary}")
             if sequence_interpretation:
                 st.write(sequence_interpretation)
