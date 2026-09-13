@@ -861,14 +861,22 @@ def bat_call_morphology(row):
     center_hz = float((high_hz + low_hz) / 2)
     relative_bandwidth = bandwidth_hz / max(center_hz, 1.0)
     if relative_bandwidth >= 0.35:
-        shape = "Broadband frequency-modulated (FM) pulse"
+        shape = "Short pulse sweeping through a wide range of pitches"
+        technical_shape = "broadband FM"
+        explanation = "The bat changes pitch quickly during this pulse, which helps it judge nearby objects in detail."
     elif relative_bandwidth <= 0.15:
-        shape = "Narrowband / quasi-constant-frequency (QCF) pulse"
+        shape = "Longer pulse staying near one pitch"
+        technical_shape = "narrowband / QCF"
+        explanation = "The pitch changes little, making this pulse well suited to detecting targets over a longer distance."
     else:
-        shape = "Mixed FM-QCF pulse"
+        shape = "Pitch sweep followed by a steadier tone"
+        technical_shape = "mixed FM-QCF"
+        explanation = "This combines a quick pitch change with a steadier ending and is common during general navigation."
 
     return {
         "shape": shape,
+        "technical_shape": technical_shape,
+        "explanation": explanation,
         "duration_ms": duration_ms,
         "low_khz": float(low_hz) / 1000,
         "high_khz": float(high_hz) / 1000,
@@ -876,7 +884,50 @@ def bat_call_morphology(row):
     }
 
 
-def render_audio_inspector(row, data_root, dataset_type, key_prefix):
+def bat_sequence_context(row, context_df, source_start, duration):
+    if context_df is None or context_df.empty:
+        return pd.DataFrame([row])
+
+    candidates = context_df.copy()
+    if "Detector" in candidates.columns:
+        candidates = candidates[candidates["Detector"].fillna("").astype(str).str.lower() == "batdetect2"]
+    if "recording_id" in candidates.columns and pd.notna(row.get("recording_id")):
+        candidates = candidates[candidates["recording_id"] == row["recording_id"]]
+    elif "relative_audio_path" in candidates.columns:
+        candidates = candidates[candidates["relative_audio_path"] == row.get("relative_audio_path")]
+    candidates = candidates[candidates["CommonName"] == row.get("CommonName")]
+
+    source_end = source_start + duration
+    candidates = candidates[
+        (pd.to_numeric(candidates["EndTime"], errors="coerce") >= source_start)
+        & (pd.to_numeric(candidates["BeginTime"], errors="coerce") <= source_end)
+    ].copy()
+    return candidates.sort_values("BeginTime")
+
+
+def bat_sequence_description(sequence_df):
+    pulse_count = len(sequence_df)
+    if pulse_count < 2:
+        return f"{pulse_count} detected pulse in this view", None
+
+    pulse_times = pd.to_numeric(sequence_df["BeginTime"], errors="coerce").dropna().sort_values()
+    intervals_ms = pulse_times.diff().dropna() * 1000
+    if intervals_ms.empty:
+        return f"{pulse_count} detected pulses in this view", None
+
+    median_interval = float(intervals_ms.median())
+    if pulse_count >= 5 and median_interval < 15:
+        pattern = "Very rapid sequence; this can occur during close approach or a possible feeding buzz."
+    elif pulse_count >= 4 and median_interval < 45:
+        pattern = "Rapid sequence; this can occur as a bat approaches or inspects something nearby."
+    elif median_interval <= 150:
+        pattern = "Regularly spaced echolocation sequence, consistent with general searching or navigation."
+    else:
+        pattern = "Widely spaced or incomplete sequence; there are too few nearby pulses for a behavioral interpretation."
+    return f"{pulse_count} detected pulses in this view; median spacing {median_interval:.0f} ms", pattern
+
+
+def render_audio_inspector(row, data_root, dataset_type, key_prefix, context_df=None):
     playback = resolve_playback_audio(row, data_root)
     wav_path = playback["path"]
     start = playback["start"]
@@ -901,11 +952,21 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix):
 
         morphology = bat_call_morphology(row) if playback_kind in {"bats", "batdetect2"} else None
         if morphology:
-            st.markdown(f"**Detected call shape:** {morphology['shape']}")
+            sequence_df = bat_sequence_context(row, context_df, playback["source_start"], duration)
+            sequence_summary, sequence_interpretation = bat_sequence_description(sequence_df)
+            st.markdown(f"**Visible call sequence:** {sequence_summary}")
+            if sequence_interpretation:
+                st.write(sequence_interpretation)
+            st.markdown(
+                f"**Selected pulse:** {morphology['shape']} "
+                f"({morphology['technical_shape']})"
+            )
+            st.write(morphology["explanation"])
             st.caption(
                 f"BatDetect2 box: {morphology['low_khz']:.1f}-{morphology['high_khz']:.1f} kHz, "
                 f"{morphology['duration_ms']:.1f} ms, {morphology['bandwidth_khz']:.1f} kHz bandwidth. "
-                "This describes pulse shape, not confirmed behavior such as search, approach, feeding buzz, or social calling."
+                "Yellow boxes mark nearby pulses given the same species label; red marks the selected pulse. "
+                "These are clues, not confirmed behavior such as search, approach, feeding buzz, or social calling."
             )
         elif playback_kind not in {"bats", "batdetect2"}:
             st.caption(
@@ -943,6 +1004,24 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix):
         detection_end = min(duration, float(row["EndTime"]) - playback["source_start"])
         if detection_end > detection_start:
             if morphology:
+                for _, sequence_row in sequence_df.head(100).iterrows():
+                    sequence_start = max(0.0, float(sequence_row["BeginTime"]) - playback["source_start"])
+                    sequence_end = min(duration, float(sequence_row["EndTime"]) - playback["source_start"])
+                    sequence_low = pd.to_numeric(pd.Series([sequence_row.get("LowFreqHz")]), errors="coerce").iloc[0]
+                    sequence_high = pd.to_numeric(pd.Series([sequence_row.get("HighFreqHz")]), errors="coerce").iloc[0]
+                    if sequence_end <= sequence_start or pd.isna(sequence_low) or pd.isna(sequence_high):
+                        continue
+                    ax.add_patch(
+                        plt.Rectangle(
+                            (sequence_start, float(sequence_low)),
+                            sequence_end - sequence_start,
+                            max(1.0, float(sequence_high - sequence_low)),
+                            fill=False,
+                            edgecolor="#ffc857",
+                            linewidth=0.8,
+                            alpha=0.8,
+                        )
+                    )
                 rectangle = plt.Rectangle(
                     (detection_start, float(row["LowFreqHz"])),
                     detection_end - detection_start,
@@ -1515,6 +1594,7 @@ def render_gallery(gallery_df, data_root, gallery_type):
                         data_root,
                         gallery_type,
                         key_prefix=f"gallery_{gallery_type}_{species_key}_{selected_rank}",
+                        context_df=species_df,
                     )
         gallery_progress.progress(
             species_index / len(selected_species),
@@ -4033,6 +4113,7 @@ with inspector_tab:
             data_root,
             inspector_kind,
             key_prefix=f"inspector_{selected_index}",
+            context_df=df,
         )
 
 con.close()
