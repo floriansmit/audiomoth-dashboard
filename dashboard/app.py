@@ -938,8 +938,8 @@ def add_horizontal_brace(ax, x_start, x_end, label):
         return
     width = x_end - x_start
     midpoint = (x_start + x_end) / 2
-    y = 0.94
-    depth = 0.055
+    y = 0.58
+    depth = 0.20
     vertices = [
         (x_start, y),
         (x_start + 0.02 * width, y),
@@ -960,21 +960,20 @@ def add_horizontal_brace(ax, x_start, x_end, label):
         MatplotlibPath(vertices, codes),
         transform=ax.get_xaxis_transform(),
         fill=False,
-        color="#ffc857",
+        color="#d39b00",
         linewidth=1.8,
         clip_on=False,
     )
     ax.add_patch(brace)
     ax.text(
         midpoint,
-        y + 0.015,
+        0.82,
         label,
         transform=ax.get_xaxis_transform(),
         ha="center",
         va="bottom",
-        color="white",
+        color="#1f2937",
         fontsize=9,
-        bbox={"boxstyle": "round,pad=0.25", "facecolor": "#1f2937", "edgecolor": "none", "alpha": 0.9},
     )
 
 
@@ -1048,7 +1047,16 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix, context_df=
             )
 
         spectrum = librosa.amplitude_to_db(np.abs(librosa.stft(y)), ref=np.max)
-        fig, ax = plt.subplots(figsize=(12, 5))
+        if morphology:
+            fig = plt.figure(figsize=(12, 5.8))
+            grid = fig.add_gridspec(2, 1, height_ratios=[0.9, 5], hspace=0.02)
+            annotation_ax = fig.add_subplot(grid[0])
+            ax = fig.add_subplot(grid[1], sharex=annotation_ax)
+            annotation_ax.set_xlim(0, duration)
+            annotation_ax.set_ylim(0, 1)
+            annotation_ax.axis("off")
+        else:
+            fig, ax = plt.subplots(figsize=(12, 5))
         librosa.display.specshow(spectrum, sr=sr, x_axis="time", y_axis="log", ax=ax)
         ax.set_ylim([20, sr / 2])
         detection_start = max(0.0, float(row["BeginTime"]) - playback["source_start"])
@@ -1057,21 +1065,26 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix, context_df=
             if morphology:
                 sequence_start = max(0.0, float(sequence_df["BeginTime"].min()) - playback["source_start"])
                 sequence_end = min(duration, float(sequence_df["EndTime"].max()) - playback["source_start"])
-                add_horizontal_brace(ax, sequence_start, sequence_end, sequence_plot_label)
+                add_horizontal_brace(annotation_ax, sequence_start, sequence_end, sequence_plot_label)
                 selected_x = (detection_start + detection_end) / 2
                 selected_y = (float(row["LowFreqHz"]) + float(row["HighFreqHz"])) / 2
                 label_x = min(max(selected_x + 0.65, 0.75), max(0.75, duration - 0.2))
-                ax.annotate(
+                annotation_ax.annotate(
                     "Selected pulse",
-                    xy=(selected_x, selected_y),
-                    xycoords="data",
-                    xytext=(label_x, 0.72),
-                    textcoords=ax.get_xaxis_transform(),
+                    xy=(selected_x, 0.02),
+                    xytext=(label_x, 0.20),
                     ha="center",
                     color="white",
                     fontsize=9,
                     arrowprops={"arrowstyle": "->", "color": "#ff5a5f", "linewidth": 1.8},
                     bbox={"boxstyle": "round,pad=0.25", "facecolor": "#ff5a5f", "edgecolor": "none", "alpha": 0.9},
+                )
+                arrow_start_y = min((sr / 2) * 0.97, max(selected_y * 1.25, selected_y + 1500))
+                ax.annotate(
+                    "",
+                    xy=(selected_x, selected_y),
+                    xytext=(selected_x, arrow_start_y),
+                    arrowprops={"arrowstyle": "->", "color": "#ff5a5f", "linewidth": 1.5},
                 )
             else:
                 ax.axvspan(detection_start, detection_end, color="#ff5a5f", alpha=0.18)
