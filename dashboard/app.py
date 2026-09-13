@@ -19,6 +19,8 @@ import duckdb
 import librosa
 import librosa.display
 import matplotlib.pyplot as plt
+from matplotlib.patches import PathPatch
+from matplotlib.path import Path as MatplotlibPath
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -908,23 +910,72 @@ def bat_sequence_context(row, context_df, source_start, duration):
 def bat_sequence_description(sequence_df):
     pulse_count = len(sequence_df)
     if pulse_count < 2:
-        return f"{pulse_count} detected pulse in this view", None
+        return f"{pulse_count} detected pulse in this view", None, "Single detected pulse"
 
     pulse_times = pd.to_numeric(sequence_df["BeginTime"], errors="coerce").dropna().sort_values()
     intervals_ms = pulse_times.diff().dropna() * 1000
     if intervals_ms.empty:
-        return f"{pulse_count} detected pulses in this view", None
+        return f"{pulse_count} detected pulses in this view", None, "Detected pulse sequence"
 
     median_interval = float(intervals_ms.median())
     if pulse_count >= 5 and median_interval < 15:
         pattern = "Very rapid sequence; this can occur during close approach or a possible feeding buzz."
+        plot_label = "Very rapid echolocation sequence"
     elif pulse_count >= 4 and median_interval < 45:
         pattern = "Rapid sequence; this can occur as a bat approaches or inspects something nearby."
+        plot_label = "Rapid approach-like echolocation sequence"
     elif median_interval <= 150:
         pattern = "Regularly spaced echolocation sequence, consistent with general searching or navigation."
+        plot_label = "Regularly spaced echolocation sequence"
     else:
         pattern = "Widely spaced or incomplete sequence; there are too few nearby pulses for a behavioral interpretation."
-    return f"{pulse_count} detected pulses in this view; median spacing {median_interval:.0f} ms", pattern
+        plot_label = "Widely spaced pulse sequence"
+    return f"{pulse_count} detected pulses in this view; median spacing {median_interval:.0f} ms", pattern, plot_label
+
+
+def add_horizontal_brace(ax, x_start, x_end, label):
+    if x_end <= x_start:
+        return
+    width = x_end - x_start
+    midpoint = (x_start + x_end) / 2
+    y = 0.94
+    depth = 0.055
+    vertices = [
+        (x_start, y),
+        (x_start + 0.02 * width, y),
+        (x_start + 0.02 * width, y - depth / 2),
+        (x_start + 0.08 * width, y - depth / 2),
+        (x_start + 0.25 * width, y - depth / 2),
+        (midpoint - 0.03 * width, y - depth / 2),
+        (midpoint, y - depth),
+        (midpoint + 0.03 * width, y - depth / 2),
+        (x_end - 0.25 * width, y - depth / 2),
+        (x_end - 0.08 * width, y - depth / 2),
+        (x_end - 0.02 * width, y - depth / 2),
+        (x_end - 0.02 * width, y),
+        (x_end, y),
+    ]
+    codes = [MatplotlibPath.MOVETO] + [MatplotlibPath.CURVE4] * 12
+    brace = PathPatch(
+        MatplotlibPath(vertices, codes),
+        transform=ax.get_xaxis_transform(),
+        fill=False,
+        color="#ffc857",
+        linewidth=1.8,
+        clip_on=False,
+    )
+    ax.add_patch(brace)
+    ax.text(
+        midpoint,
+        y + 0.015,
+        label,
+        transform=ax.get_xaxis_transform(),
+        ha="center",
+        va="bottom",
+        color="white",
+        fontsize=9,
+        bbox={"boxstyle": "round,pad=0.25", "facecolor": "#1f2937", "edgecolor": "none", "alpha": 0.9},
+    )
 
 
 def render_audio_inspector(row, data_root, dataset_type, key_prefix, context_df=None):
@@ -953,7 +1004,7 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix, context_df=
         morphology = bat_call_morphology(row) if playback_kind in {"bats", "batdetect2"} else None
         if morphology:
             sequence_df = bat_sequence_context(row, context_df, playback["source_start"], duration)
-            sequence_summary, sequence_interpretation = bat_sequence_description(sequence_df)
+            sequence_summary, sequence_interpretation, sequence_plot_label = bat_sequence_description(sequence_df)
             st.markdown(f"**Visible call sequence:** {sequence_summary}")
             if sequence_interpretation:
                 st.write(sequence_interpretation)
@@ -965,7 +1016,7 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix, context_df=
             st.caption(
                 f"BatDetect2 box: {morphology['low_khz']:.1f}-{morphology['high_khz']:.1f} kHz, "
                 f"{morphology['duration_ms']:.1f} ms, {morphology['bandwidth_khz']:.1f} kHz bandwidth. "
-                "Yellow boxes mark nearby pulses given the same species label; red marks the selected pulse. "
+                "The brace marks the nearby sequence given the same species label; an arrow marks the selected pulse. "
                 "These are clues, not confirmed behavior such as search, approach, feeding buzz, or social calling."
             )
         elif playback_kind not in {"bats", "batdetect2"}:
@@ -1004,44 +1055,34 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix, context_df=
         detection_end = min(duration, float(row["EndTime"]) - playback["source_start"])
         if detection_end > detection_start:
             if morphology:
-                for _, sequence_row in sequence_df.head(100).iterrows():
-                    sequence_start = max(0.0, float(sequence_row["BeginTime"]) - playback["source_start"])
-                    sequence_end = min(duration, float(sequence_row["EndTime"]) - playback["source_start"])
-                    sequence_low = pd.to_numeric(pd.Series([sequence_row.get("LowFreqHz")]), errors="coerce").iloc[0]
-                    sequence_high = pd.to_numeric(pd.Series([sequence_row.get("HighFreqHz")]), errors="coerce").iloc[0]
-                    if sequence_end <= sequence_start or pd.isna(sequence_low) or pd.isna(sequence_high):
-                        continue
-                    ax.add_patch(
-                        plt.Rectangle(
-                            (sequence_start, float(sequence_low)),
-                            sequence_end - sequence_start,
-                            max(1.0, float(sequence_high - sequence_low)),
-                            fill=False,
-                            edgecolor="#ffc857",
-                            linewidth=0.8,
-                            alpha=0.8,
-                        )
-                    )
-                rectangle = plt.Rectangle(
-                    (detection_start, float(row["LowFreqHz"])),
-                    detection_end - detection_start,
-                    float(row["HighFreqHz"]) - float(row["LowFreqHz"]),
-                    fill=False,
-                    edgecolor="#ff5a5f",
-                    linewidth=2.0,
+                sequence_start = max(0.0, float(sequence_df["BeginTime"].min()) - playback["source_start"])
+                sequence_end = min(duration, float(sequence_df["EndTime"].max()) - playback["source_start"])
+                add_horizontal_brace(ax, sequence_start, sequence_end, sequence_plot_label)
+                selected_x = (detection_start + detection_end) / 2
+                selected_y = (float(row["LowFreqHz"]) + float(row["HighFreqHz"])) / 2
+                label_x = min(max(selected_x + 0.65, 0.75), max(0.75, duration - 0.2))
+                ax.annotate(
+                    "Selected pulse",
+                    xy=(selected_x, selected_y),
+                    xycoords="data",
+                    xytext=(label_x, 0.72),
+                    textcoords=ax.get_xaxis_transform(),
+                    ha="center",
+                    color="white",
+                    fontsize=9,
+                    arrowprops={"arrowstyle": "->", "color": "#ff5a5f", "linewidth": 1.8},
+                    bbox={"boxstyle": "round,pad=0.25", "facecolor": "#ff5a5f", "edgecolor": "none", "alpha": 0.9},
                 )
-                ax.add_patch(rectangle)
-                label_y = min(float(row["HighFreqHz"]) * 1.08, (sr / 2) * 0.94)
             else:
                 ax.axvspan(detection_start, detection_end, color="#ff5a5f", alpha=0.18)
                 label_y = (sr / 2) * 0.88
-            ax.annotate(
-                str(row.get("CommonName") or "Selected detection"),
-                xy=(detection_start, label_y),
-                color="white",
-                fontsize=9,
-                bbox={"boxstyle": "round,pad=0.25", "facecolor": "#ff5a5f", "edgecolor": "none", "alpha": 0.9},
-            )
+                ax.annotate(
+                    str(row.get("CommonName") or "Selected detection"),
+                    xy=(detection_start, label_y),
+                    color="white",
+                    fontsize=9,
+                    bbox={"boxstyle": "round,pad=0.25", "facecolor": "#ff5a5f", "edgecolor": "none", "alpha": 0.9},
+                )
         st.pyplot(fig)
         plt.close(fig)
 
