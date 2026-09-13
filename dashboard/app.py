@@ -3661,6 +3661,7 @@ with st.sidebar:
 view_mode = st.session_state["view_mode"]
 
 if view_mode == "Processing":
+    con.close()
     render_processing_page(data_root, db_path)
     st.stop()
 
@@ -3675,6 +3676,7 @@ if view_mode == "Bird highlights":
         if not scoped.empty:
             scoped["DateTime"] = pd.to_datetime(scoped["DateTime"])
         render_gallery(scoped, data_root, "birdnet")
+    con.close()
     st.stop()
 
 if view_mode == "Bat highlights":
@@ -3688,6 +3690,7 @@ if view_mode == "Bat highlights":
         if not scoped.empty:
             scoped["DateTime"] = pd.to_datetime(scoped["DateTime"])
         render_gallery(scoped, data_root, "batdetect2")
+    con.close()
     st.stop()
 
 with st.sidebar:
@@ -3705,6 +3708,7 @@ else:
 
 if df.empty:
     st.error("No detections found for the selected dataset.")
+    con.close()
     st.stop()
 
 df["DateTime"] = pd.to_datetime(df["DateTime"])
@@ -3962,3 +3966,5 @@ with inspector_tab:
             inspector_kind,
             key_prefix=f"inspector_{selected_index}",
         )
+
+con.close()
