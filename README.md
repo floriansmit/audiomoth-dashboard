@@ -4,11 +4,19 @@ AudioMoth Dashboard is a local Streamlit app for exploring AudioMoth recordings 
 
 The app is designed for local field-recording projects. Audio files, analyzer outputs, manifests, and DuckDB databases are ignored by Git by default.
 
-## Demo
+## Screenshots
 
-![AudioMoth Dashboard demo](docs/images/AudioMoth.gif)
+### Project overview
 
-[Watch the higher-quality MP4 demo](docs/images/AudioMoth.mp4)
+![Project overview with location map](docs/images/dashboard-overview.png)
+
+### Species occurrence matrix
+
+![Species occurrence matrix with bird images and detection counts](docs/images/species-matrix.png)
+
+### Bat detection inspection
+
+![Bat spectrogram with pulse predictions and call-sequence interpretation](docs/images/bat-detection-inspector.png)
 
 ## Features
 
@@ -19,7 +27,9 @@ The app is designed for local field-recording projects. Audio files, analyzer ou
 - Build or update a DuckDB database from a manifest.
 - Browse detections by dataset, species, date, hour, confidence, and detector.
 - Show species notes and media from Wikipedia when available.
-- Play detections and render spectrograms from the linked audio file.
+- Select a detection directly from the inspector table to load its audio and spectrogram.
+- Prefer generated playback clips when available, including 10x time expansion for ultrasonic bat calls.
+- Inspect BatDetect2 pulse predictions, frequency-band sequences, pulse spacing, and cautious plain-language call-shape notes.
 - Review and rank recordings using classifier confidence, signal-to-noise ratio, and detection-level dBFS metrics.
 
 ## Folder Layout
@@ -141,7 +151,7 @@ Birda output should stay in `birda/`. BirdNET Analyzer output should stay in `bi
 
 Playback clips can be generated from the Processing page after the database has been updated. The clipper uses all database detections that share the selected dataset's `audio/` folder, so bird and bat detections protect the same original WAV files. Balanced, curated, and broad presets make the quality controls approachable; Custom exposes confidence, minimum-SNR, maximum-background-dBFS, and per-species limits. The best detections per species are ranked using 50% confidence, 35% SNR, and 15% background quietness. Processing also provides confidence/SNR analytics and 15-minute signal, background, and SNR timelines. Overlapping windows are merged using the selected margin. A live estimate compares the projected quality-clip size with the source WAV collection before export. Clips are written to `clips/` with a `clips_manifest.csv`; original WAV files are not deleted by the app.
 
-See [docs/data-structure.md](docs/data-structure.md) for more detail.
+See [docs/using-the-dashboard.md](docs/using-the-dashboard.md) for the interface guide and [docs/data-structure.md](docs/data-structure.md) for data details.
 
 ## Manual Commands
 
@@ -211,7 +221,7 @@ AudioMoth Dashboard uses external bioacoustic tools through their published Pyth
 - [BatDetect2](https://github.com/macaodha/batdetect2) for detecting and classifying bat echolocation calls.
 - [Birda](https://github.com/tphakala/birda) as an optional high-performance CLI backend for BirdNET, Perch, and BattyBirdNET models.
 
-These projects are installed as dependencies from `requirements.txt` and are called by the dashboard during processing. This repository does not vendor, redistribute, or modify their source code. Please refer to the respective projects for their documentation, licenses, citation guidance, and model details.
+BirdNET Analyzer and BatDetect2 are installed from `requirements.txt` and called through their published interfaces. Birda is installed separately as an optional command-line tool. This repository does not vendor, redistribute, or modify any of their source code. Please refer to the respective projects for their documentation, licenses, citation guidance, and model details.
 
 ## License
 
