@@ -484,7 +484,7 @@ def detector_sources(row, data_root, dataset_dir):
     birda_dir = None
     if birda_value:
         birda_dir = (data_root / birda_value).resolve()
-    else:
+    elif dataset_type != "bats":
         fallback_birda_dir = dataset_dir / "birda"
         if fallback_birda_dir.exists():
             birda_dir = fallback_birda_dir

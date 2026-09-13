@@ -233,7 +233,7 @@ def build_manifest_rows(data_root, datasets_dir, existing_rows):
                     "period_label": period_label_from_audio(audio_dir),
                     "birdnet_dir": "",
                     "batdetect2_dir": relative_path(batdetect2_dir, data_root),
-                    "birda_dir": relative_path(birda_dir, data_root) if birda_dir else "",
+                    "birda_dir": "",
                     "audio_dir": relative_path(audio_dir, data_root),
                 },
             ]

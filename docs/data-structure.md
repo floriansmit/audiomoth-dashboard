@@ -44,6 +44,8 @@ Start (s)  End (s)  Scientific name  Common name  Confidence  File
 
 Birda is the recommended backend when performance matters because its Windows CUDA build can use NVIDIA GPUs and it skips existing outputs unless `--force` is used. Install Birda separately from [tphakala/birda](https://github.com/tphakala/birda), then use the Processing page to run it.
 
+When one audio folder has both bird-analyzer and BatDetect2 outputs, the manifest creates separate `a` (birds) and `b` (bats) rows. BirdNET and Birda belong to the bird row; BatDetect2 belongs to the bat row. The recordings can therefore be shared without mixing bird species into the bats dashboard.
+
 ## BatDetect2 Output
 
 BatDetect2 outputs should stay in `batdetect2_outputs/`. The builder imports these as detector `batdetect2`, so bird and bat detections remain traceable to the model that produced them.
