@@ -23,6 +23,12 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import pydeck as pdk
+try:
+    import truststore
+
+    truststore.inject_into_ssl()
+except ImportError:
+    truststore = None
 import requests
 import soundfile as sf
 import streamlit as st
@@ -286,10 +292,12 @@ def inject_design_system():
                 background: #f5f7fb;
             }
             header[data-testid="stHeader"] {
-                height: 0;
+                height: 3rem;
                 background: transparent;
             }
-            div[data-testid="stToolbar"],
+            div[data-testid="stToolbar"] {
+                display: flex;
+            }
             div[data-testid="stDecoration"],
             div[data-testid="stStatusWidget"] {
                 display: none;

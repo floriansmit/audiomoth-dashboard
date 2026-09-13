@@ -34,6 +34,7 @@ def create_venv(installer):
 def uv_command(requirements_path, python_path):
     return [
         "uv",
+        "--system-certs",
         "pip",
         "install",
         "--python",

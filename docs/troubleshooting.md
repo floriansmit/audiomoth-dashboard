@@ -1,5 +1,15 @@
 # Troubleshooting
 
+## Wikipedia certificate errors
+
+The dashboard uses `truststore` so HTTPS requests honor the operating system certificate store. If Wikipedia reports `CERTIFICATE_VERIFY_FAILED`, update the local environment with:
+
+```powershell
+python install_requirements.py
+```
+
+Then restart the dashboard. Do not disable TLS certificate verification.
+
 ## The Dashboard Opens But Says There Is No Database
 
 This is expected on a clean clone. Open `Processing` in the sidebar, create or select a dataset folder, run analyzers, regenerate the manifest, then build or append to the database.

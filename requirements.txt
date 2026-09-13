@@ -13,3 +13,4 @@ plotly
 pydeck
 requests
 soundfile
+truststore
