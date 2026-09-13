@@ -897,40 +897,70 @@ def bat_sequence_context(row, context_df, source_start, duration):
         candidates = candidates[candidates["recording_id"] == row["recording_id"]]
     elif "relative_audio_path" in candidates.columns:
         candidates = candidates[candidates["relative_audio_path"] == row.get("relative_audio_path")]
-    candidates = candidates[candidates["CommonName"] == row.get("CommonName")]
-
     source_end = source_start + duration
     candidates = candidates[
         (pd.to_numeric(candidates["EndTime"], errors="coerce") >= source_start)
         & (pd.to_numeric(candidates["BeginTime"], errors="coerce") <= source_end)
     ].copy()
-    return candidates.sort_values("BeginTime")
+
+    selected_low = pd.to_numeric(pd.Series([row.get("LowFreqHz")]), errors="coerce").iloc[0]
+    selected_high = pd.to_numeric(pd.Series([row.get("HighFreqHz")]), errors="coerce").iloc[0]
+    if pd.notna(selected_low) and pd.notna(selected_high) and selected_high > selected_low:
+        selected_center = (float(selected_low) + float(selected_high)) / 2
+        candidate_low = pd.to_numeric(candidates["LowFreqHz"], errors="coerce")
+        candidate_high = pd.to_numeric(candidates["HighFreqHz"], errors="coerce")
+        candidate_center = (candidate_low + candidate_high) / 2
+        frequency_ratio = candidate_center / selected_center
+        candidates = candidates[frequency_ratio.between(0.70, 1.30)].copy()
+
+    if candidates.empty:
+        return pd.DataFrame([row])
+
+    # BatDetect2 can emit overlapping boxes with different species guesses for one
+    # acoustic pulse. Keep the strongest box from each overlapping time group.
+    merged_rows = []
+    overlap_group = []
+    group_end = None
+    for _, candidate in candidates.sort_values(["BeginTime", "EndTime"]).iterrows():
+        begin = float(candidate["BeginTime"])
+        end = float(candidate["EndTime"])
+        if overlap_group and begin > group_end:
+            merged_rows.append(max(overlap_group, key=lambda item: float(item.get("Confidence", 0))))
+            overlap_group = []
+            group_end = None
+        overlap_group.append(candidate)
+        group_end = end if group_end is None else max(group_end, end)
+    if overlap_group:
+        merged_rows.append(max(overlap_group, key=lambda item: float(item.get("Confidence", 0))))
+
+    return pd.DataFrame(merged_rows).sort_values("BeginTime")
 
 
 def bat_sequence_description(sequence_df):
     pulse_count = len(sequence_df)
     if pulse_count < 2:
-        return f"{pulse_count} detected pulse in this view", None, "Single detected pulse"
+        return f"{pulse_count} detected pulse in this frequency band", None, "Single detected pulse"
 
     pulse_times = pd.to_numeric(sequence_df["BeginTime"], errors="coerce").dropna().sort_values()
     intervals_ms = pulse_times.diff().dropna() * 1000
     if intervals_ms.empty:
-        return f"{pulse_count} detected pulses in this view", None, "Detected pulse sequence"
+        return f"{pulse_count} detected pulses in this frequency band", None, "Detected pulse sequence"
 
     median_interval = float(intervals_ms.median())
+    spacing_variation = float(intervals_ms.std(ddof=0) / max(intervals_ms.mean(), 1.0))
     if pulse_count >= 5 and median_interval < 15:
         pattern = "Very rapid sequence; this can occur during close approach or a possible feeding buzz."
         plot_label = "Very rapid echolocation sequence"
     elif pulse_count >= 4 and median_interval < 45:
         pattern = "Rapid sequence; this can occur as a bat approaches or inspects something nearby."
         plot_label = "Rapid approach-like echolocation sequence"
-    elif median_interval <= 150:
+    elif pulse_count >= 4 and spacing_variation <= 0.45:
         pattern = "Regularly spaced echolocation sequence, consistent with general searching or navigation."
         plot_label = "Regularly spaced echolocation sequence"
     else:
-        pattern = "Widely spaced or incomplete sequence; there are too few nearby pulses for a behavioral interpretation."
-        plot_label = "Widely spaced pulse sequence"
-    return f"{pulse_count} detected pulses in this view; median spacing {median_interval:.0f} ms", pattern, plot_label
+        pattern = "Irregular or incomplete sequence; the visible spacing does not support a stronger behavioral interpretation."
+        plot_label = "Irregular or incomplete pulse sequence"
+    return f"{pulse_count} detected pulses in this frequency band; median spacing {median_interval:.0f} ms", pattern, plot_label
 
 
 def add_horizontal_brace(ax, x_start, x_end, label):
@@ -1096,7 +1126,7 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix, context_df=
             st.caption(
                 f"BatDetect2 box: {morphology['low_khz']:.1f}-{morphology['high_khz']:.1f} kHz, "
                 f"{morphology['duration_ms']:.1f} ms, {morphology['bandwidth_khz']:.1f} kHz bandwidth. "
-                "The brace marks the nearby sequence given the same species label; an arrow marks the selected pulse. "
+                "The brace marks nearby BatDetect2 pulses in the selected frequency band; an arrow marks the selected pulse. "
                 "These are clues, not confirmed behavior such as search, approach, feeding buzz, or social calling."
             )
         elif playback_kind not in {"bats", "batdetect2"}:
