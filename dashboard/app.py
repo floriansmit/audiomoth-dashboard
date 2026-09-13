@@ -1001,28 +1001,13 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix, context_df=
         default_playback = "10x time expansion" if playback_kind in {"bats", "batdetect2"} else "Original speed"
 
         morphology = bat_call_morphology(row) if playback_kind in {"bats", "batdetect2"} else None
+        sequence_df = None
+        sequence_summary = None
+        sequence_interpretation = None
+        sequence_plot_label = None
         if morphology:
             sequence_df = bat_sequence_context(row, context_df, playback["source_start"], duration)
             sequence_summary, sequence_interpretation, sequence_plot_label = bat_sequence_description(sequence_df)
-            st.markdown(f"**Visible call sequence:** {sequence_summary}")
-            if sequence_interpretation:
-                st.write(sequence_interpretation)
-            st.markdown(
-                f"**Selected pulse:** {morphology['shape']} "
-                f"({morphology['technical_shape']})"
-            )
-            st.write(morphology["explanation"])
-            st.caption(
-                f"BatDetect2 box: {morphology['low_khz']:.1f}-{morphology['high_khz']:.1f} kHz, "
-                f"{morphology['duration_ms']:.1f} ms, {morphology['bandwidth_khz']:.1f} kHz bandwidth. "
-                "The brace marks the nearby sequence given the same species label; an arrow marks the selected pulse. "
-                "These are clues, not confirmed behavior such as search, approach, feeding buzz, or social calling."
-            )
-        elif playback_kind not in {"bats", "batdetect2"}:
-            st.caption(
-                "BirdNET identifies the species in an audio window but does not classify the vocalization "
-                "as song, contact call, or alarm call."
-            )
 
         playback_label = st.selectbox(
             "Audio playback",
@@ -1098,6 +1083,27 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix, context_df=
                 )
         st.pyplot(fig)
         plt.close(fig)
+
+        if morphology:
+            st.markdown(f"**Visible call sequence:** {sequence_summary}")
+            if sequence_interpretation:
+                st.write(sequence_interpretation)
+            st.markdown(
+                f"**Selected pulse:** {morphology['shape']} "
+                f"({morphology['technical_shape']})"
+            )
+            st.write(morphology["explanation"])
+            st.caption(
+                f"BatDetect2 box: {morphology['low_khz']:.1f}-{morphology['high_khz']:.1f} kHz, "
+                f"{morphology['duration_ms']:.1f} ms, {morphology['bandwidth_khz']:.1f} kHz bandwidth. "
+                "The brace marks the nearby sequence given the same species label; an arrow marks the selected pulse. "
+                "These are clues, not confirmed behavior such as search, approach, feeding buzz, or social calling."
+            )
+        elif playback_kind not in {"bats", "batdetect2"}:
+            st.caption(
+                "BirdNET identifies the species in an audio window but does not classify the vocalization "
+                "as song, contact call, or alarm call."
+            )
 
     except Exception as exc:
         st.exception(exc)
