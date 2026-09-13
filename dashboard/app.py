@@ -760,6 +760,7 @@ def resolve_playback_audio(row, data_root, margin_seconds=3.0):
                 "start": max(0.0, available_start - clip_start),
                 "duration": max(0.5, available_end - available_start),
                 "is_clip": True,
+                "source_start": available_start,
             }
 
     wav_path = resolve_audio_path(row, data_root)
@@ -768,6 +769,7 @@ def resolve_playback_audio(row, data_root, margin_seconds=3.0):
         "start": desired_start,
         "duration": max(0.5, desired_end - desired_start),
         "is_clip": False,
+        "source_start": desired_start,
     }
 
 
@@ -848,6 +850,32 @@ def quality_candidates(species_df, data_root, max_candidates=30):
     return results
 
 
+def bat_call_morphology(row):
+    low_hz = pd.to_numeric(pd.Series([row.get("LowFreqHz")]), errors="coerce").iloc[0]
+    high_hz = pd.to_numeric(pd.Series([row.get("HighFreqHz")]), errors="coerce").iloc[0]
+    duration_ms = max(0.0, float(row["EndTime"]) - float(row["BeginTime"])) * 1000
+    if pd.isna(low_hz) or pd.isna(high_hz) or high_hz <= low_hz:
+        return None
+
+    bandwidth_hz = float(high_hz - low_hz)
+    center_hz = float((high_hz + low_hz) / 2)
+    relative_bandwidth = bandwidth_hz / max(center_hz, 1.0)
+    if relative_bandwidth >= 0.35:
+        shape = "Broadband frequency-modulated (FM) pulse"
+    elif relative_bandwidth <= 0.15:
+        shape = "Narrowband / quasi-constant-frequency (QCF) pulse"
+    else:
+        shape = "Mixed FM-QCF pulse"
+
+    return {
+        "shape": shape,
+        "duration_ms": duration_ms,
+        "low_khz": float(low_hz) / 1000,
+        "high_khz": float(high_hz) / 1000,
+        "bandwidth_khz": bandwidth_hz / 1000,
+    }
+
+
 def render_audio_inspector(row, data_root, dataset_type, key_prefix):
     playback = resolve_playback_audio(row, data_root)
     wav_path = playback["path"]
@@ -870,6 +898,21 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix):
         }
         playback_kind = str(dataset_type).lower()
         default_playback = "10x time expansion" if playback_kind in {"bats", "batdetect2"} else "Original speed"
+
+        morphology = bat_call_morphology(row) if playback_kind in {"bats", "batdetect2"} else None
+        if morphology:
+            st.markdown(f"**Detected call shape:** {morphology['shape']}")
+            st.caption(
+                f"BatDetect2 box: {morphology['low_khz']:.1f}-{morphology['high_khz']:.1f} kHz, "
+                f"{morphology['duration_ms']:.1f} ms, {morphology['bandwidth_khz']:.1f} kHz bandwidth. "
+                "This describes pulse shape, not confirmed behavior such as search, approach, feeding buzz, or social calling."
+            )
+        elif playback_kind not in {"bats", "batdetect2"}:
+            st.caption(
+                "BirdNET identifies the species in an audio window but does not classify the vocalization "
+                "as song, contact call, or alarm call."
+            )
+
         playback_label = st.selectbox(
             "Audio playback",
             list(playback_options),
@@ -896,6 +939,30 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix):
         fig, ax = plt.subplots(figsize=(12, 5))
         librosa.display.specshow(spectrum, sr=sr, x_axis="time", y_axis="log", ax=ax)
         ax.set_ylim([20, sr / 2])
+        detection_start = max(0.0, float(row["BeginTime"]) - playback["source_start"])
+        detection_end = min(duration, float(row["EndTime"]) - playback["source_start"])
+        if detection_end > detection_start:
+            if morphology:
+                rectangle = plt.Rectangle(
+                    (detection_start, float(row["LowFreqHz"])),
+                    detection_end - detection_start,
+                    float(row["HighFreqHz"]) - float(row["LowFreqHz"]),
+                    fill=False,
+                    edgecolor="#ff5a5f",
+                    linewidth=2.0,
+                )
+                ax.add_patch(rectangle)
+                label_y = min(float(row["HighFreqHz"]) * 1.08, (sr / 2) * 0.94)
+            else:
+                ax.axvspan(detection_start, detection_end, color="#ff5a5f", alpha=0.18)
+                label_y = (sr / 2) * 0.88
+            ax.annotate(
+                str(row.get("CommonName") or "Selected detection"),
+                xy=(detection_start, label_y),
+                color="white",
+                fontsize=9,
+                bbox={"boxstyle": "round,pad=0.25", "facecolor": "#ff5a5f", "edgecolor": "none", "alpha": 0.9},
+            )
         st.pyplot(fig)
         plt.close(fig)
 
