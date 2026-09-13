@@ -3941,22 +3941,23 @@ with inspector_tab:
     ]
     visible_columns = [column for column in visible_columns if column in filtered_df.columns]
 
-    st.dataframe(filtered_df[visible_columns], use_container_width=True)
-
     if filtered_df.empty:
+        st.dataframe(filtered_df[visible_columns], use_container_width=True)
         st.warning("No detections match the selected filters.")
     else:
-        filtered_df["Display"] = (
-            filtered_df.index.astype(str)
-            + " | "
-            + selected_species
-            + " | "
-            + filtered_df["Confidence"].round(3).astype(str)
+        st.caption("Select a detection row to load its audio and spectrogram.")
+        detection_table = filtered_df[visible_columns].reset_index(drop=True)
+        table_event = st.dataframe(
+            detection_table,
+            width="stretch",
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key=f"inspector_table_{selected_dataset_id}_{selected_species}",
         )
-
-        selected_detection = st.selectbox("Select detection", filtered_df["Display"])
-        selected_index = int(selected_detection.split(" | ")[0])
-        row = filtered_df.loc[selected_index]
+        selected_position = table_event.selection.rows[0] if table_event.selection.rows else 0
+        row = filtered_df.iloc[selected_position]
+        selected_index = row.name
         inspector_kind = str(row.get("Detector") or "birdnet").lower()
         if str(row.get("dataset_type") or "").lower() == "bats":
             inspector_kind = "bats"
