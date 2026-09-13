@@ -294,9 +294,11 @@ def inject_design_system():
             header[data-testid="stHeader"] {
                 height: 3rem;
                 background: transparent;
+                pointer-events: none;
             }
             div[data-testid="stToolbar"] {
                 display: flex;
+                pointer-events: auto;
             }
             div[data-testid="stDecoration"],
             div[data-testid="stStatusWidget"] {
@@ -332,15 +334,18 @@ def inject_design_system():
             }
             .stTabs [data-baseweb="tab-list"],
             [data-testid="stTabs"] [role="tablist"] {
-                position: sticky !important;
-                top: 0 !important;
-                z-index: 1000 !important;
                 gap: 0.35rem;
                 padding: 0.45rem 0;
                 border-bottom: 1px solid rgba(128, 128, 128, 0.30);
                 background: #f5f7fb;
                 box-shadow: 0 6px 12px rgba(16, 24, 40, 0.05);
                 overflow-x: auto;
+            }
+            [data-testid="stTabs"] [role="tablist"]:not([role="tabpanel"] [role="tablist"]),
+            .stTabs [data-baseweb="tab-list"]:not([role="tabpanel"] [data-baseweb="tab-list"]) {
+                position: sticky !important;
+                top: 0 !important;
+                z-index: 1000 !important;
             }
             .stTabs [data-baseweb="tab"],
             [data-testid="stTabs"] [role="tab"] {
