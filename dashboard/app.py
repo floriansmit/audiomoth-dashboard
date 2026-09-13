@@ -1654,6 +1654,57 @@ def processing_dataset_inventory(dataset_dir_text):
     }
 
 
+def manifest_dataset_ids_for_folder(manifest_path, dataset_name):
+    if not manifest_path.exists():
+        return []
+    manifest = pd.read_csv(manifest_path)
+    matching_ids = []
+    for _, row in manifest.iterrows():
+        audio_value = str(row.get("audio_dir") or "")
+        if Path(audio_value).parent.name == dataset_name:
+            matching_ids.append(str(row["dataset_id"]))
+    return matching_ids
+
+
+def database_detector_counts(db_path, dataset_ids):
+    counts = {}
+    present_ids = set()
+    import_snapshots = {}
+    if not db_path.exists() or not dataset_ids:
+        return counts, present_ids, import_snapshots
+    con = duckdb.connect(str(db_path), read_only=True)
+    try:
+        con.register("status_dataset_ids", pd.DataFrame({"dataset_id": dataset_ids}))
+        present_ids = set(
+            con.execute(
+                "SELECT dataset_id FROM datasets WHERE dataset_id IN (SELECT dataset_id FROM status_dataset_ids)"
+            ).df()["dataset_id"].astype(str)
+        )
+        rows = con.execute(
+            """
+            SELECT lower(COALESCE(Detector, 'birdnet')) AS detector, count(*) AS detections
+            FROM detections
+            WHERE dataset_id IN (SELECT dataset_id FROM status_dataset_ids)
+            GROUP BY 1
+            """
+        ).fetchall()
+        counts = {str(detector): int(count) for detector, count in rows}
+        tables = set(con.execute("SHOW TABLES").df()["name"].astype(str))
+        if "dataset_import_status" in tables:
+            snapshot_rows = con.execute(
+                """
+                SELECT detector, max(output_count) AS output_count
+                FROM dataset_import_status
+                WHERE dataset_id IN (SELECT dataset_id FROM status_dataset_ids)
+                GROUP BY detector
+                """
+            ).fetchall()
+            import_snapshots = {str(detector): int(count) for detector, count in snapshot_rows}
+    finally:
+        con.close()
+    return counts, present_ids, import_snapshots
+
+
 @st.cache_data(ttl=10, show_spinner=False)
 def cached_audio_count(audio_dir_text):
     return count_audio_files(Path(audio_dir_text))
@@ -2589,58 +2640,69 @@ def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
     dataset_summary = ", ".join(str(dataset_id) for dataset_id in dataset_ids)
     st.caption(f"Using detections from database dataset(s): {dataset_summary}")
     selected_detectors = checkbox_selection("Detectors to clip", detectors, detectors, "clip_detector")
-    st.caption(
-        "Quality clips must pass all three filters. SNR measures how clearly the detected sound stands above its local "
-        "background; background dBFS prevents loud environments from ranking highly just because the signal is louder."
-    )
-    clip_cols = st.columns(4)
-    with clip_cols[0]:
-        min_confidence = st.number_input(
-            "Minimum confidence",
-            min_value=0.01,
-            max_value=0.99,
-            value=0.20,
-            step=0.05,
-            key="clip_min_confidence",
+    quality_presets = {
+        "Balanced library (recommended)": {
+            "confidence": 0.20,
+            "snr": 3.0,
+            "noise": -25.0,
+            "per_species": 20,
+            "description": "A useful listening library with moderate quality filtering and broader species coverage.",
+        },
+        "Curated highlights": {
+            "confidence": 0.50,
+            "snr": 10.0,
+            "noise": -35.0,
+            "per_species": 5,
+            "description": "A small showcase of clear, confident detections recorded against quiet backgrounds.",
+        },
+        "Broad collection": {
+            "confidence": 0.15,
+            "snr": 0.0,
+            "noise": -20.0,
+            "per_species": 0,
+            "description": "Keeps nearly every plausible detection whose signal is at least as loud as its background.",
+        },
+        "Custom": None,
+    }
+    quality_preset = st.selectbox("Clip collection", list(quality_presets), key="clip_quality_preset")
+    preset = quality_presets[quality_preset]
+    if preset is not None:
+        min_confidence = preset["confidence"]
+        min_snr_db = preset["snr"]
+        max_noise_dbfs = preset["noise"]
+        per_species = preset["per_species"]
+        cap_text = "all" if not per_species else str(per_species)
+        st.info(
+            f"{preset['description']} Confidence >= {min_confidence:.2f}, SNR >= {min_snr_db:.0f} dB, "
+            f"background <= {max_noise_dbfs:.0f} dBFS, up to {cap_text} detections per species."
         )
-    with clip_cols[1]:
-        min_snr_db = st.number_input(
-            "Minimum SNR (dB)",
-            min_value=-20.0,
-            max_value=80.0,
-            value=6.0,
-            step=1.0,
-            help="Require the detected interval to stand this many decibels above the local noise floor.",
-            key="clip_min_snr_db",
-        )
-    with clip_cols[2]:
-        max_noise_dbfs = st.number_input(
-            "Maximum background dBFS",
-            min_value=-100.0,
-            max_value=0.0,
-            value=-30.0,
-            step=1.0,
-            help="Reject louder backgrounds. More-negative values are quieter and stricter.",
-            key="clip_max_noise_dbfs",
-        )
-    with clip_cols[3]:
-        per_species = st.number_input(
-            "Best detections per species",
-            min_value=0,
-            max_value=1000,
-            value=5,
-            step=1,
-            help="Ranked using 50% confidence, 35% SNR, and 15% background quietness. Use 0 for all passing detections.",
-            key="clip_per_species",
-        )
+    else:
+        custom_cols = st.columns(4)
+        with custom_cols[0]:
+            min_confidence = st.number_input(
+                "Minimum confidence", min_value=0.01, max_value=0.99, value=0.20, step=0.05, key="clip_custom_confidence"
+            )
+        with custom_cols[1]:
+            min_snr_db = st.number_input(
+                "Minimum SNR (dB)", min_value=-20.0, max_value=80.0, value=3.0, step=1.0, key="clip_custom_snr"
+            )
+        with custom_cols[2]:
+            max_noise_dbfs = st.number_input(
+                "Maximum background dBFS", min_value=-100.0, max_value=0.0, value=-25.0, step=1.0, key="clip_custom_noise"
+            )
+        with custom_cols[3]:
+            per_species = st.number_input(
+                "Best per species", min_value=0, max_value=1000, value=20, step=1, help="Use 0 for all passing detections.", key="clip_custom_per_species"
+            )
 
-    output_cols = st.columns(3)
-    with output_cols[0]:
-        pad_seconds = st.number_input("Margin before/after", min_value=0.0, max_value=30.0, value=3.0, step=1.0, key="clip_pad_seconds")
-    with output_cols[1]:
-        max_clips = st.number_input("Maximum clips", min_value=0, max_value=100000, value=0, step=100, help="Use 0 for no limit.", key="clip_max_clips")
-    with output_cols[2]:
-        overwrite = st.checkbox("Overwrite matching clips", value=False, key="clip_overwrite")
+    with st.expander("Output options"):
+        output_cols = st.columns(3)
+        with output_cols[0]:
+            pad_seconds = st.number_input("Margin before/after", min_value=0.0, max_value=30.0, value=3.0, step=1.0, key="clip_pad_seconds")
+        with output_cols[1]:
+            max_clips = st.number_input("Maximum clips", min_value=0, max_value=100000, value=0, step=100, help="Use 0 for no limit.", key="clip_max_clips")
+        with output_cols[2]:
+            overwrite = st.checkbox("Overwrite matching clips", value=False, key="clip_overwrite")
 
     with st.expander("Signal, noise, and nightly patterns", expanded=True):
         render_clip_snr_analytics(
@@ -2661,6 +2723,14 @@ def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
             "Use Compute missing audio quality metrics in the Database tab."
         )
 
+    eligible_clip_df = select_quality_clip_detections(
+        detections,
+        selected_detectors,
+        min_confidence,
+        min_snr_db,
+        max_noise_dbfs,
+        None,
+    )
     clip_df = select_quality_clip_detections(
         detections,
         selected_detectors,
@@ -2673,7 +2743,8 @@ def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
     limited_groups = clip_groups[: int(max_clips)] if max_clips else clip_groups
     species_count = clip_df["CommonName"].nunique() if not clip_df.empty else 0
     st.caption(
-        f"This selection contains {len(clip_df):,} detections across {species_count:,} species "
+        f"{len(eligible_clip_df):,} detections pass the quality thresholds. The per-species selection keeps "
+        f"{len(clip_df):,} detections across {species_count:,} species "
         f"and would create/update up to {len(limited_groups):,} merged clips."
     )
 
@@ -3343,95 +3414,145 @@ def render_processing_page(data_root, db_path):
                 render_batdetect_runner(audio_dir, batdetect_output_dir)
 
     with database_tab:
-        st.subheader("Update Manifest And Database")
-        st.info(
-            "After running an analyzer: first regenerate the manifest. "
-            "Then use Append for a brand-new dataset that has never been imported. "
-            "Use Rebuild listed datasets if you added files to, or re-ran outputs for, an existing dataset. "
-            "Use Replace DB from manifest when you want to remove old datasets that are no longer in the manifest."
+        st.subheader("Database Status")
+        try:
+            project_dataset_ids = manifest_dataset_ids_for_folder(manifest_path, dataset_name)
+        except Exception as exc:
+            project_dataset_ids = []
+            st.warning(f"Could not read the manifest: {exc}")
+
+        try:
+            db_detector_counts, db_project_ids, import_snapshots = database_detector_counts(
+                resolved_db_path, project_dataset_ids
+            )
+        except Exception as exc:
+            db_detector_counts, db_project_ids, import_snapshots = {}, set(), {}
+            st.warning(f"Could not inspect the database: {exc}")
+
+        database_status = pd.DataFrame(
+            [
+                {
+                    "Analyzer": "Birda",
+                    "Output files": birda_output_count,
+                    "WAVs not analyzed": birda_pending_count,
+                    "Detections in database": db_detector_counts.get("birda", 0),
+                },
+                {
+                    "Analyzer": "BirdNET",
+                    "Output files": birdnet_output_count,
+                    "WAVs not analyzed": birdnet_pending_count,
+                    "Detections in database": db_detector_counts.get("birdnet", 0),
+                },
+                {
+                    "Analyzer": "BatDetect2",
+                    "Output files": batdetect_output_count,
+                    "WAVs not analyzed": batdetect_pending_count,
+                    "Detections in database": db_detector_counts.get("batdetect2", 0),
+                },
+            ]
         )
+        st.dataframe(database_status, hide_index=True, use_container_width=True)
 
-        action_cols = st.columns(4)
-        with action_cols[0]:
-            if st.button("Regenerate manifest"):
-                command = [
-                    sys.executable,
-                    str(SCRIPTS_DIR / "generate_manifest.py"),
-                    "--data-root",
-                    str(data_root),
-                    "--manifest",
-                    str(manifest_path),
-                ]
-                with st.spinner("Updating manifest..."):
-                    returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
-                show_command_result(returncode, stdout, stderr)
+        output_total = birda_output_count + birdnet_output_count + batdetect_output_count
+        current_output_counts = {
+            "birda": birda_output_count,
+            "birdnet": birdnet_output_count,
+            "batdetect2": batdetect_output_count,
+        }
+        changed_analyzers = [
+            detector
+            for detector, count in current_output_counts.items()
+            if count and import_snapshots.get(detector) != count
+        ]
+        missing_project_ids = set(project_dataset_ids) - db_project_ids
+        if output_total == 0:
+            st.warning("No analyzer outputs are available yet. Run Birda, BirdNET, or BatDetect2 before updating the database.")
+        elif not project_dataset_ids:
+            st.warning("This project is not in the manifest yet. Use Update selected project; it will generate the manifest first.")
+        elif not resolved_db_path.exists() or missing_project_ids:
+            st.warning("This project has analyzer outputs that are not yet in DuckDB. Use Update selected project.")
+        elif not import_snapshots:
+            st.warning(
+                "This database predates output tracking. Use Update selected project once; future changes will then be detected automatically."
+            )
+        elif changed_analyzers:
+            analyzer_names = ", ".join(detector_names.title() for detector_names in changed_analyzers)
+            st.warning(f"Output-file counts changed for {analyzer_names}. Use Update selected project.")
+        else:
+            st.success("The selected project appears up to date. Run Update selected project after adding or replacing analyzer outputs.")
 
-        with action_cols[1]:
-            if st.button("Append to database"):
-                command = [
-                    sys.executable,
-                    str(SCRIPTS_DIR / "build_db.py"),
-                    "--data-root",
-                    str(data_root),
-                    "--manifest",
-                    str(manifest_path),
-                    "--db",
-                    str(resolved_db_path),
-                    "--append",
-                ]
-                with st.spinner("Appending detections and missing metrics..."):
-                    returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
-                show_command_result(returncode, stdout, stderr)
-
-        with action_cols[2]:
-            if st.button("Rebuild listed datasets"):
-                command = [
-                    sys.executable,
-                    str(SCRIPTS_DIR / "build_db.py"),
-                    "--data-root",
-                    str(data_root),
-                    "--manifest",
-                    str(manifest_path),
-                    "--db",
-                    str(resolved_db_path),
-                ]
-                with st.spinner("Rebuilding datasets from manifest..."):
-                    returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
-                show_command_result(returncode, stdout, stderr)
-
-        with action_cols[3]:
-            if st.button("Replace DB from manifest"):
-                command = [
-                    sys.executable,
-                    str(SCRIPTS_DIR / "build_db.py"),
-                    "--data-root",
-                    str(data_root),
-                    "--manifest",
-                    str(manifest_path),
-                    "--db",
-                    str(resolved_db_path),
-                    "--replace-db",
-                ]
-                with st.spinner("Replacing database from manifest..."):
-                    returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
-                show_command_result(returncode, stdout, stderr)
-
-        if st.button(
-            "Compute missing audio quality metrics",
-            help="Backfill signal level, local background level, and SNR without re-importing detections.",
-        ):
-            command = [
+        st.markdown("**Recommended action**")
+        st.caption(
+            "This one button is suitable for both new and existing projects. It regenerates the manifest, then replaces only "
+            "the selected project's database rows with the current analyzer outputs. Other projects remain untouched."
+        )
+        if st.button("Update selected project", type="primary", use_container_width=True):
+            manifest_command = [
                 sys.executable,
-                str(SCRIPTS_DIR / "build_db.py"),
+                str(SCRIPTS_DIR / "generate_manifest.py"),
                 "--data-root",
                 str(data_root),
-                "--db",
-                str(resolved_db_path),
-                "--audio-metrics-only",
+                "--manifest",
+                str(manifest_path),
             ]
-            with st.spinner("Computing missing detection-level dBFS and SNR metrics..."):
-                returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
-            show_command_result(returncode, stdout, stderr)
+            with st.spinner("Refreshing manifest and selected project..."):
+                manifest_code, manifest_stdout, manifest_stderr = run_captured_command(manifest_command, PROJECT_ROOT)
+                if manifest_code == 0:
+                    refreshed_ids = manifest_dataset_ids_for_folder(manifest_path, dataset_name)
+                    if refreshed_ids:
+                        build_command = [
+                            sys.executable,
+                            str(SCRIPTS_DIR / "build_db.py"),
+                            "--data-root",
+                            str(data_root),
+                            "--manifest",
+                            str(manifest_path),
+                            "--db",
+                            str(resolved_db_path),
+                        ]
+                        for dataset_id in refreshed_ids:
+                            build_command.extend(["--dataset-id", dataset_id])
+                        build_code, build_stdout, build_stderr = run_captured_command(build_command, PROJECT_ROOT)
+                        show_command_result(
+                            build_code,
+                            f"{manifest_stdout}\n{build_stdout}".strip(),
+                            f"{manifest_stderr}\n{build_stderr}".strip(),
+                        )
+                    else:
+                        st.error("The manifest was regenerated, but no rows matched the selected project folder.")
+                else:
+                    show_command_result(manifest_code, manifest_stdout, manifest_stderr)
+
+        with st.expander("Advanced database actions"):
+            st.caption("Most updates should use Update selected project above. These actions operate on the whole manifest or database.")
+            action_cols = st.columns(3)
+            with action_cols[0]:
+                if st.button("Regenerate manifest only"):
+                    command = [sys.executable, str(SCRIPTS_DIR / "generate_manifest.py"), "--data-root", str(data_root), "--manifest", str(manifest_path)]
+                    with st.spinner("Updating manifest..."):
+                        returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
+                    show_command_result(returncode, stdout, stderr)
+            with action_cols[1]:
+                if st.button("Rebuild all listed projects"):
+                    command = [sys.executable, str(SCRIPTS_DIR / "build_db.py"), "--data-root", str(data_root), "--manifest", str(manifest_path), "--db", str(resolved_db_path)]
+                    with st.spinner("Rebuilding all manifest projects..."):
+                        returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
+                    show_command_result(returncode, stdout, stderr)
+            with action_cols[2]:
+                if st.button("Replace entire database"):
+                    command = [sys.executable, str(SCRIPTS_DIR / "build_db.py"), "--data-root", str(data_root), "--manifest", str(manifest_path), "--db", str(resolved_db_path), "--replace-db"]
+                    with st.spinner("Replacing the entire database..."):
+                        returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
+                    show_command_result(returncode, stdout, stderr)
+
+            if st.button(
+                "Compute missing audio quality metrics only",
+                help="Backfill signal level, local background level, and SNR without importing detections.",
+            ):
+                command = [sys.executable, str(SCRIPTS_DIR / "build_db.py"), "--data-root", str(data_root), "--db", str(resolved_db_path), "--audio-metrics-only"]
+                with st.spinner("Computing missing detection-level dBFS and SNR metrics..."):
+                    returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
+                show_command_result(returncode, stdout, stderr)
 
         if manifest_path.exists():
             st.subheader("Manifest Preview")
@@ -3441,15 +3562,10 @@ def render_processing_page(data_root, db_path):
                 st.warning(f"Could not preview manifest: {exc}")
 
     clip_dataset_ids = []
-    if manifest_path.exists():
-        try:
-            manifest_df = pd.read_csv(manifest_path)
-            for _, manifest_row in manifest_df.iterrows():
-                audio_value = str(manifest_row.get("audio_dir") or "")
-                if Path(audio_value).parent.name == dataset_name:
-                    clip_dataset_ids.append(str(manifest_row["dataset_id"]))
-        except Exception as exc:
-            st.warning(f"Could not read manifest for clip dataset choices: {exc}")
+    try:
+        clip_dataset_ids = manifest_dataset_ids_for_folder(manifest_path, dataset_name)
+    except Exception as exc:
+        st.warning(f"Could not read manifest for clip dataset choices: {exc}")
     if not clip_dataset_ids:
         clip_dataset_ids = [dataset_name]
     with clips_tab:

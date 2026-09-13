@@ -81,7 +81,9 @@ Build or update the database from the Processing page, or run:
 python scripts\build_db.py --data-root "."
 ```
 
-Use `--append` for brand-new datasets. Use the normal rebuild command when analyzer outputs changed or new audio files were added for datasets already in the database.
+In the dashboard, select the project and use **Update selected project** for both new and existing projects. It regenerates the manifest and rebuilds only the selected folder's bird and bat dataset rows. The status table shows analyzer outputs, unanalyzed WAV files, and detections already in DuckDB. Whole-manifest rebuild and database replacement remain under Advanced database actions.
+
+From the command line, repeat `--dataset-id` to update only the required manifest rows. Use `--append` only when rows must be added without replacing any existing detections; it does not remove stale detections from changed analyzer outputs.
 
 ### Detection audio quality
 

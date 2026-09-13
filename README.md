@@ -139,7 +139,7 @@ datasets/
 
 Birda output should stay in `birda/`. BirdNET Analyzer output should stay in `birdnet/`. BatDetect2 output should stay in `batdetect2_outputs/`. This keeps detector provenance explicit in the database.
 
-Playback clips can be generated from the Processing page after the database has been updated. The clipper uses all database detections that share the selected dataset's `audio/` folder, so bird and bat detections protect the same original WAV files. Quality clips must pass configurable confidence, minimum-SNR, and maximum-background-dBFS filters. The best detections per species are ranked using 50% confidence, 35% SNR, and 15% background quietness. Processing also provides confidence/SNR analytics and 15-minute signal, background, and SNR timelines. Overlapping windows are merged using the selected margin. A live estimate compares the projected quality-clip size with the source WAV collection before export. Clips are written to `clips/` with a `clips_manifest.csv`; original WAV files are not deleted by the app.
+Playback clips can be generated from the Processing page after the database has been updated. The clipper uses all database detections that share the selected dataset's `audio/` folder, so bird and bat detections protect the same original WAV files. Balanced, curated, and broad presets make the quality controls approachable; Custom exposes confidence, minimum-SNR, maximum-background-dBFS, and per-species limits. The best detections per species are ranked using 50% confidence, 35% SNR, and 15% background quietness. Processing also provides confidence/SNR analytics and 15-minute signal, background, and SNR timelines. Overlapping windows are merged using the selected margin. A live estimate compares the projected quality-clip size with the source WAV collection before export. Clips are written to `clips/` with a `clips_manifest.csv`; original WAV files are not deleted by the app.
 
 See [docs/data-structure.md](docs/data-structure.md) for more detail.
 
@@ -155,6 +155,12 @@ Build or update the database from the manifest:
 
 ```powershell
 python scripts\build_db.py --data-root "."
+```
+
+To rebuild only one project represented by multiple manifest rows:
+
+```powershell
+python scripts\build_db.py --data-root "." --dataset-id 11a_site --dataset-id 11b_site
 ```
 
 Append new detections without replacing existing datasets:

@@ -409,6 +409,18 @@ def create_schema(con):
         )
         """
     )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dataset_import_status (
+            dataset_id TEXT,
+            detector TEXT,
+            output_count BIGINT,
+            latest_output_mtime DOUBLE,
+            imported_at TIMESTAMP,
+            PRIMARY KEY (dataset_id, detector)
+        )
+        """
+    )
     metric_columns = con.execute("PRAGMA table_info('detection_audio_metrics')").df()["name"].tolist()
     for column in ("signal_dbfs", "noise_dbfs", "snr_db"):
         if column not in metric_columns:
@@ -433,6 +445,7 @@ def delete_datasets(con, dataset_ids):
     )
     con.execute("DELETE FROM detections WHERE dataset_id IN (SELECT dataset_id FROM datasets_to_replace)")
     con.execute("DELETE FROM recordings WHERE dataset_id IN (SELECT dataset_id FROM datasets_to_replace)")
+    con.execute("DELETE FROM dataset_import_status WHERE dataset_id IN (SELECT dataset_id FROM datasets_to_replace)")
     con.execute("DELETE FROM datasets WHERE dataset_id IN (SELECT dataset_id FROM datasets_to_replace)")
     con.unregister("datasets_to_replace")
 
@@ -494,6 +507,7 @@ def import_dataset(row, data_root):
     recordings = {}
     detections = []
     skipped = []
+    import_status = []
 
     for source in detector_sources(row, data_root, dataset_dir):
         detector = source["detector"]
@@ -504,6 +518,16 @@ def import_dataset(row, data_root):
             source_files = sorted(source_dir.rglob("*.csv"))
         else:
             source_files = sorted(source_dir.rglob("*.csv"))
+
+        import_status.append(
+            {
+                "dataset_id": dataset_id,
+                "detector": detector,
+                "output_count": len(source_files),
+                "latest_output_mtime": max((path.stat().st_mtime for path in source_files), default=np.nan),
+                "imported_at": pd.Timestamp.now("UTC").to_pydatetime(),
+            }
+        )
 
         for table_path in source_files:
             try:
@@ -587,7 +611,7 @@ def import_dataset(row, data_root):
 
     detections_df = pd.concat(detections, ignore_index=True) if detections else pd.DataFrame()
     recordings_df = pd.DataFrame(recordings.values())
-    return dataset, recordings_df, detections_df, skipped
+    return dataset, recordings_df, detections_df, skipped, pd.DataFrame(import_status)
 
 
 def insert_df(con, table_name, df):
@@ -640,6 +664,26 @@ def upsert_detection_audio_metrics(con, df):
         f"SELECT {columns} FROM temp_detection_audio_metrics"
     )
     con.unregister("temp_detection_audio_metrics")
+
+
+def upsert_import_status(con, df):
+    if df.empty:
+        return
+    con.register("temp_dataset_import_status", df)
+    con.execute(
+        """
+        DELETE FROM dataset_import_status
+        WHERE (dataset_id, detector) IN (
+            SELECT dataset_id, detector FROM temp_dataset_import_status
+        )
+        """
+    )
+    columns = ", ".join(f'"{column}"' for column in df.columns)
+    con.execute(
+        f"INSERT INTO dataset_import_status ({columns}) "
+        f"SELECT {columns} FROM temp_dataset_import_status"
+    )
+    con.unregister("temp_dataset_import_status")
 
 
 def upsert_dataset(con, dataset):
@@ -753,7 +797,16 @@ def main():
         action="store_true",
         help="Do not import datasets; only create/fill missing audio metrics in the existing database.",
     )
+    parser.add_argument(
+        "--dataset-id",
+        action="append",
+        dest="selected_dataset_ids",
+        help="Import or rebuild only this manifest dataset ID. Repeat for multiple IDs.",
+    )
     args = parser.parse_args()
+
+    if args.replace_db and args.selected_dataset_ids:
+        parser.error("--replace-db cannot be combined with --dataset-id")
 
     data_root = Path(args.data_root).resolve()
     manifest_path = Path(args.manifest)
@@ -781,21 +834,31 @@ def main():
         if missing:
             raise ValueError(f"Manifest is missing columns: {', '.join(sorted(missing))}")
 
+        if args.selected_dataset_ids:
+            requested_ids = {clean_id(value) for value in args.selected_dataset_ids}
+            manifest_ids = manifest["dataset_id"].map(clean_id)
+            missing_ids = requested_ids - set(manifest_ids)
+            if missing_ids:
+                raise ValueError(f"Dataset IDs not found in manifest: {', '.join(sorted(missing_ids))}")
+            manifest = manifest[manifest_ids.isin(requested_ids)].copy()
+
         dataset_ids = [clean_id(value) for value in manifest["dataset_id"]]
         if not args.append:
             delete_datasets(con, dataset_ids)
 
         for _, manifest_row in manifest.iterrows():
-            dataset, recordings_df, detections_df, skipped = import_dataset(manifest_row, data_root)
+            dataset, recordings_df, detections_df, skipped, import_status_df = import_dataset(manifest_row, data_root)
 
             if args.append:
                 upsert_dataset(con, dataset)
                 insert_missing_df(con, "recordings", recordings_df, "recording_id")
                 insert_missing_df(con, "detections", detections_df, "detection_id")
+                upsert_import_status(con, import_status_df)
             else:
                 insert_df(con, "datasets", pd.DataFrame([dataset]))
                 insert_df(con, "recordings", recordings_df)
                 insert_df(con, "detections", detections_df)
+                insert_df(con, "dataset_import_status", import_status_df)
 
             print(
                 f"Imported {dataset['dataset_id']}: "
