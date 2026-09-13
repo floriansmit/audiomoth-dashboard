@@ -20,7 +20,7 @@ The app is designed for local field-recording projects. Audio files, analyzer ou
 - Browse detections by dataset, species, date, hour, confidence, and detector.
 - Show species notes and media from Wikipedia when available.
 - Play detections and render spectrograms from the linked audio file.
-- Review best bird and bat recordings with detection-level mean dBFS metrics.
+- Review and rank recordings using classifier confidence, signal-to-noise ratio, and detection-level dBFS metrics.
 
 ## Folder Layout
 
@@ -139,7 +139,7 @@ datasets/
 
 Birda output should stay in `birda/`. BirdNET Analyzer output should stay in `birdnet/`. BatDetect2 output should stay in `batdetect2_outputs/`. This keeps detector provenance explicit in the database.
 
-Playback clips can be generated from the Processing page after the database has been updated. The clipper uses all database detections that share the selected dataset's `audio/` folder, so bird and bat detections protect the same original WAV files. Quality clips must pass configurable confidence and mean-dBFS filters, and the best detections per species are ranked using both confidence and quietness. Overlapping windows are merged using the selected margin. A live estimate compares the projected quality-clip size with the source WAV collection before export. Clips are written to `clips/` with a `clips_manifest.csv`; original WAV files are not deleted by the app.
+Playback clips can be generated from the Processing page after the database has been updated. The clipper uses all database detections that share the selected dataset's `audio/` folder, so bird and bat detections protect the same original WAV files. Quality clips must pass configurable confidence, minimum-SNR, and maximum-background-dBFS filters. The best detections per species are ranked using 50% confidence, 35% SNR, and 15% background quietness. Processing also provides confidence/SNR analytics and 15-minute signal, background, and SNR timelines. Overlapping windows are merged using the selected margin. A live estimate compares the projected quality-clip size with the source WAV collection before export. Clips are written to `clips/` with a `clips_manifest.csv`; original WAV files are not deleted by the app.
 
 See [docs/data-structure.md](docs/data-structure.md) for more detail.
 
@@ -174,6 +174,8 @@ Only compute missing detection-level audio metrics:
 ```powershell
 python scripts\build_db.py --data-root "." --audio-metrics-only
 ```
+
+This incrementally fills mean level, detected-signal level, local background-noise level, and estimated SNR. Existing complete rows are left unchanged. Use `--refresh-audio-metrics` only when all quality metrics should be recalculated.
 
 Run BatDetect2 manually:
 

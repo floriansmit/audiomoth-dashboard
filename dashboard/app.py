@@ -136,13 +136,27 @@ def load_platform_detections(con, detector=None, dataset_ids=None):
     detection_columns = con.execute("PRAGMA table_info('detections')").df()["name"].tolist()
     tables = con.execute("SHOW TABLES").df()["name"].tolist()
     has_audio_metrics = "detection_audio_metrics" in tables
+    metric_columns = (
+        con.execute("PRAGMA table_info('detection_audio_metrics')").df()["name"].tolist()
+        if has_audio_metrics
+        else []
+    )
 
     dataset_type_sql = (
         "ds.dataset_type"
         if "dataset_type" in dataset_columns
         else "CASE WHEN lower(ds.dataset_id) LIKE '%bat%' THEN 'bats' ELSE 'birds' END AS dataset_type"
     )
-    metrics_select_sql = "m.mean_dbfs AS MeanDbfs" if has_audio_metrics else "CAST(NULL AS DOUBLE) AS MeanDbfs"
+    metric_fields = [
+        ("mean_dbfs", "MeanDbfs"),
+        ("signal_dbfs", "SignalDbfs"),
+        ("noise_dbfs", "NoiseDbfs"),
+        ("snr_db", "SnrDb"),
+    ]
+    metrics_select_sql = ",\n                ".join(
+        f"m.{source} AS {alias}" if source in metric_columns else f"CAST(NULL AS DOUBLE) AS {alias}"
+        for source, alias in metric_fields
+    )
     metrics_join_sql = (
         "LEFT JOIN detection_audio_metrics m ON d.detection_id = m.detection_id"
         if has_audio_metrics
@@ -228,6 +242,9 @@ def load_legacy_data(con):
     df["period_label"] = ""
     df["relative_audio_path"] = df.get("BeginPath", "")
     df["MeanDbfs"] = np.nan
+    df["SignalDbfs"] = np.nan
+    df["NoiseDbfs"] = np.nan
+    df["SnrDb"] = np.nan
     datasets = pd.DataFrame(
         [
             {
@@ -793,6 +810,8 @@ def quality_candidates(species_df, data_root, max_candidates=30):
                 "Location": row.get("location_name", ""),
                 "Confidence": float(row["Confidence"]),
                 "Mean dBFS": mean_dbfs,
+                "Background dBFS": row.get("NoiseDbfs"),
+                "SNR dB": row.get("SnrDb"),
                 "Audio": Path(str(row.get("relative_audio_path") or row.get("BeginPath"))).name,
                 "RowIndex": row.name,
             }
@@ -802,7 +821,16 @@ def quality_candidates(species_df, data_root, max_candidates=30):
         return pd.DataFrame()
 
     results = pd.DataFrame(rows)
-    results = results.sort_values(["Confidence", "Mean dBFS"], ascending=[False, True]).head(5).reset_index(drop=True)
+    results["_confidence_rank"] = results["Confidence"].rank(pct=True)
+    results["_snr_rank"] = pd.to_numeric(results["SNR dB"], errors="coerce").rank(pct=True).fillna(0.0)
+    results["_quiet_rank"] = (-pd.to_numeric(results["Background dBFS"], errors="coerce")).rank(pct=True).fillna(0.0)
+    results["Quality"] = (
+        (0.50 * results["_confidence_rank"])
+        + (0.35 * results["_snr_rank"])
+        + (0.15 * results["_quiet_rank"])
+    )
+    results = results.sort_values(["Quality", "Confidence"], ascending=[False, False]).head(5).reset_index(drop=True)
+    results = results.drop(columns=["_confidence_rank", "_snr_rank", "_quiet_rank"])
     results.insert(0, "Rank", np.arange(1, len(results) + 1))
     return results
 
@@ -1326,8 +1354,8 @@ def render_gallery(gallery_df, data_root, gallery_type):
     label = "Bird" if gallery_type == "birdnet" else "Bat"
     st.header(f"{label} Highlights Gallery")
     st.caption(
-        "Highlights combine high classifier confidence with a lower mean dBFS value "
-        "from the surrounding audio segment. Lower dBFS is generally quieter background audio."
+        "Highlights combine classifier confidence, signal-to-noise ratio, and background quietness. "
+        "High SNR means the detected sound stands clearly above the local noise floor."
     )
 
     if gallery_df.empty:
@@ -1380,6 +1408,9 @@ def render_gallery(gallery_df, data_root, gallery_type):
                         column_config={
                             "Confidence": st.column_config.NumberColumn(format="%.3f"),
                             "Mean dBFS": st.column_config.NumberColumn(format="%.1f"),
+                            "Background dBFS": st.column_config.NumberColumn(format="%.1f"),
+                            "SNR dB": st.column_config.NumberColumn(format="%.1f"),
+                            "Quality": st.column_config.NumberColumn(format="%.3f"),
                         },
                     )
                     best["Choice"] = (
@@ -1388,9 +1419,9 @@ def render_gallery(gallery_df, data_root, gallery_type):
                         + best["Date"]
                         + " | conf "
                         + best["Confidence"].round(3).astype(str)
-                        + " | "
-                        + best["Mean dBFS"].round(1).astype(str)
-                        + " dBFS"
+                        + " | SNR "
+                        + best["SNR dB"].round(1).astype(str)
+                        + " dB"
                     )
                     selected_choice = st.selectbox(
                         "Play highlight",
@@ -2227,6 +2258,8 @@ def create_detection_clips(
             created += 1
 
         mean_values = [row.get("MeanDbfs") for row in rows if pd.notna(row.get("MeanDbfs"))]
+        noise_values = [row.get("NoiseDbfs") for row in rows if pd.notna(row.get("NoiseDbfs"))]
+        snr_values = [row.get("SnrDb") for row in rows if pd.notna(row.get("SnrDb"))]
         manifest_rows.append(
             {
                 "clip_file": clip_path.relative_to(dataset_dir).as_posix(),
@@ -2239,6 +2272,8 @@ def create_detection_clips(
                 "detections": len(rows),
                 "max_confidence": max(float(row.get("Confidence") or 0) for row in rows),
                 "min_mean_dbfs": min(mean_values) if mean_values else np.nan,
+                "quietest_background_dbfs": min(noise_values) if noise_values else np.nan,
+                "max_snr_db": max(snr_values) if snr_values else np.nan,
             }
         )
 
@@ -2254,14 +2289,23 @@ def create_detection_clips(
     return {"created": created, "skipped": skipped, "failed": failed, "manifest": manifest_path}
 
 
-def select_quality_clip_detections(detections, detectors, min_confidence, max_mean_dbfs, per_species):
+def select_quality_clip_detections(
+    detections,
+    detectors,
+    min_confidence,
+    min_snr_db,
+    max_noise_dbfs,
+    per_species,
+):
     selected = detections[detections["Detector"].fillna("birdnet").astype(str).isin(detectors)].copy()
     selected["Confidence"] = pd.to_numeric(selected["Confidence"], errors="coerce")
-    selected["MeanDbfs"] = pd.to_numeric(selected["MeanDbfs"], errors="coerce")
-    selected = selected.dropna(subset=["Confidence", "MeanDbfs", "CommonName"])
+    selected["SnrDb"] = pd.to_numeric(selected["SnrDb"], errors="coerce")
+    selected["NoiseDbfs"] = pd.to_numeric(selected["NoiseDbfs"], errors="coerce")
+    selected = selected.dropna(subset=["Confidence", "SnrDb", "NoiseDbfs", "CommonName"])
     selected = selected[
         (selected["Confidence"] >= float(min_confidence))
-        & (selected["MeanDbfs"] <= float(max_mean_dbfs))
+        & (selected["SnrDb"] >= float(min_snr_db))
+        & (selected["NoiseDbfs"] <= float(max_noise_dbfs))
     ]
     selected = selected.drop_duplicates(
         subset=["Detector", "relative_audio_path", "CommonName", "BeginTime", "EndTime", "Confidence"]
@@ -2270,15 +2314,20 @@ def select_quality_clip_detections(detections, detectors, min_confidence, max_me
         return selected
 
     selected["_confidence_rank"] = selected.groupby("CommonName")["Confidence"].rank(pct=True)
-    selected["_quiet_rank"] = (-selected["MeanDbfs"]).groupby(selected["CommonName"]).rank(pct=True)
-    selected["QualityScore"] = (0.70 * selected["_confidence_rank"]) + (0.30 * selected["_quiet_rank"])
+    selected["_snr_rank"] = selected.groupby("CommonName")["SnrDb"].rank(pct=True)
+    selected["_quiet_rank"] = (-selected["NoiseDbfs"]).groupby(selected["CommonName"]).rank(pct=True)
+    selected["QualityScore"] = (
+        (0.50 * selected["_confidence_rank"])
+        + (0.35 * selected["_snr_rank"])
+        + (0.15 * selected["_quiet_rank"])
+    )
     selected = selected.sort_values(
-        ["CommonName", "QualityScore", "Confidence", "MeanDbfs"],
-        ascending=[True, False, False, True],
+        ["CommonName", "QualityScore", "Confidence", "SnrDb", "NoiseDbfs"],
+        ascending=[True, False, False, False, True],
     )
     if per_species:
         selected = selected.groupby("CommonName", group_keys=False).head(int(per_species))
-    return selected.drop(columns=["_confidence_rank", "_quiet_rank"])
+    return selected.drop(columns=["_confidence_rank", "_snr_rank", "_quiet_rank"])
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -2317,7 +2366,106 @@ def estimate_clip_export_size(clip_groups, data_root, max_clips=None):
     return estimated_bytes, estimated_seconds, readable_groups
 
 
-def render_clip_quality_plot(detections, detectors, min_confidence, max_mean_dbfs):
+def render_clip_snr_analytics(detections, detectors, min_confidence, min_snr_db, max_noise_dbfs):
+    plot_df = detections[detections["Detector"].fillna("birdnet").astype(str).isin(detectors)].copy()
+    for column in ("Confidence", "MeanDbfs", "SignalDbfs", "NoiseDbfs", "SnrDb"):
+        plot_df[column] = pd.to_numeric(plot_df[column], errors="coerce")
+    plot_df["DateTime"] = pd.to_datetime(plot_df["DateTime"], errors="coerce")
+    plot_df = plot_df.dropna(subset=["Confidence", "NoiseDbfs", "SnrDb", "DateTime"])
+    plot_df = plot_df.drop_duplicates(
+        subset=["Detector", "relative_audio_path", "CommonName", "BeginTime", "EndTime", "Confidence"]
+    )
+    if plot_df.empty:
+        st.info("Compute the missing SNR metrics from the Database tab to enable clip analytics.")
+        return
+
+    passes = (
+        (plot_df["Confidence"] >= float(min_confidence))
+        & (plot_df["SnrDb"] >= float(min_snr_db))
+        & (plot_df["NoiseDbfs"] <= float(max_noise_dbfs))
+    )
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Measured detections", f"{len(plot_df):,}")
+    metric_cols[1].metric("Median SNR", f"{plot_df['SnrDb'].median():.1f} dB")
+    metric_cols[2].metric("Median background", f"{plot_df['NoiseDbfs'].median():.1f} dBFS")
+    metric_cols[3].metric("Passing quality filters", f"{passes.mean() * 100:.1f}%")
+
+    snr_tab, timeline_tab = st.tabs(["Confidence And SNR", "Night Timeline"])
+    with snr_tab:
+        display_df = plot_df.sample(10000, random_state=42) if len(plot_df) > 10000 else plot_df
+        fig = px.scatter(
+            display_df,
+            x="Confidence",
+            y="SnrDb",
+            color="NoiseDbfs",
+            symbol="Detector",
+            hover_data=["CommonName", "DateTime", "SignalDbfs", "MeanDbfs"],
+            labels={
+                "SnrDb": "Signal-to-noise ratio (dB)",
+                "NoiseDbfs": "Background (dBFS)",
+                "SignalDbfs": "Signal (dBFS)",
+            },
+            color_continuous_scale="Viridis_r",
+            render_mode="webgl",
+            opacity=0.5,
+        )
+        fig.add_vline(x=float(min_confidence), line_dash="dash", line_color="#e4572e")
+        fig.add_hline(y=float(min_snr_db), line_dash="dash", line_color="#2a9d8f")
+        fig.update_layout(height=520, margin={"l": 10, "r": 10, "t": 20, "b": 10})
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption(
+            "The upper-right area contains confident detections that stand clearly above their background. "
+            "Color distinguishes quiet backgrounds from loud ones."
+        )
+
+    with timeline_tab:
+        timeline = plot_df.copy()
+        timeline["TimeBin"] = timeline["DateTime"].dt.floor("15min")
+        timeline = (
+            timeline.groupby("TimeBin", as_index=False)
+            .agg(
+                MeanDbfs=("MeanDbfs", "median"),
+                SignalDbfs=("SignalDbfs", "median"),
+                NoiseDbfs=("NoiseDbfs", "median"),
+                SnrDb=("SnrDb", "median"),
+                Detections=("Confidence", "size"),
+            )
+        )
+        level_data = timeline.melt(
+            id_vars=["TimeBin"],
+            value_vars=["SignalDbfs", "NoiseDbfs", "MeanDbfs"],
+            var_name="Level",
+            value_name="dBFS",
+        )
+        level_fig = px.line(
+            level_data,
+            x="TimeBin",
+            y="dBFS",
+            color="Level",
+            markers=True,
+            color_discrete_map={"SignalDbfs": "#e4572e", "NoiseDbfs": "#2a9d8f", "MeanDbfs": "#4c78a8"},
+        )
+        level_fig.add_hline(y=float(max_noise_dbfs), line_dash="dash", line_color="#202124")
+        level_fig.update_layout(height=400, xaxis_title="Recording time", margin={"l": 10, "r": 10, "t": 20, "b": 10})
+        st.plotly_chart(level_fig, use_container_width=True)
+
+        snr_fig = px.bar(
+            timeline,
+            x="TimeBin",
+            y="SnrDb",
+            color="Detections",
+            labels={"SnrDb": "Median SNR (dB)", "TimeBin": "Recording time"},
+            color_continuous_scale="Viridis",
+        )
+        snr_fig.add_hline(y=float(min_snr_db), line_dash="dash", line_color="#e4572e")
+        snr_fig.update_layout(height=340, margin={"l": 10, "r": 10, "t": 20, "b": 10})
+        st.plotly_chart(snr_fig, use_container_width=True)
+        st.caption(
+            "Values are 15-minute medians across detection windows. This describes detected clips, not continuous ambient sound."
+        )
+
+
+def render_clip_quality_plot(detections, detectors, min_confidence):
     plot_df = detections[detections["Detector"].fillna("birdnet").astype(str).isin(detectors)].copy()
     plot_df["Confidence"] = pd.to_numeric(plot_df["Confidence"], errors="coerce")
     plot_df["MeanDbfs"] = pd.to_numeric(plot_df["MeanDbfs"], errors="coerce")
@@ -2371,7 +2519,6 @@ def render_clip_quality_plot(detections, detectors, min_confidence, max_mean_dbf
         line={"color": "#e4572e", "width": 3},
     )
     fig.add_vline(x=float(min_confidence), line_dash="dash", line_color="#2a9d8f")
-    fig.add_hline(y=float(max_mean_dbfs), line_dash="dash", line_color="#2a9d8f")
     fig.update_layout(height=500, margin={"l": 10, "r": 10, "t": 20, "b": 10})
     st.plotly_chart(fig, use_container_width=True)
 
@@ -2403,7 +2550,7 @@ def render_clip_quality_plot(detections, detectors, min_confidence, max_mean_dbf
         },
     )
     st.caption(
-        "Dashed lines show the active confidence and dBFS filters. The orange binned median helps reveal curvature "
+        "The dashed line shows the active confidence filter. The orange binned median helps reveal curvature "
         "that the straight linear fit may miss. Correlations are also reported per detector because analyzer behavior differs."
     )
 
@@ -2435,10 +2582,10 @@ def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
     st.caption(f"Using detections from database dataset(s): {dataset_summary}")
     selected_detectors = checkbox_selection("Detectors to clip", detectors, detectors, "clip_detector")
     st.caption(
-        "Quality clips must pass both filters. Mean dBFS measures the surrounding audio; "
-        "more-negative values indicate a quieter recording."
+        "Quality clips must pass all three filters. SNR measures how clearly the detected sound stands above its local "
+        "background; background dBFS prevents loud environments from ranking highly just because the signal is louder."
     )
-    clip_cols = st.columns(3)
+    clip_cols = st.columns(4)
     with clip_cols[0]:
         min_confidence = st.number_input(
             "Minimum confidence",
@@ -2449,23 +2596,33 @@ def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
             key="clip_min_confidence",
         )
     with clip_cols[1]:
-        max_mean_dbfs = st.number_input(
-            "Maximum mean dBFS",
-            min_value=-100.0,
-            max_value=0.0,
-            value=-35.0,
+        min_snr_db = st.number_input(
+            "Minimum SNR (dB)",
+            min_value=-20.0,
+            max_value=80.0,
+            value=6.0,
             step=1.0,
-            help="Only retain detections at or below this level. Lower values are quieter.",
-            key="clip_max_mean_dbfs",
+            help="Require the detected interval to stand this many decibels above the local noise floor.",
+            key="clip_min_snr_db",
         )
     with clip_cols[2]:
+        max_noise_dbfs = st.number_input(
+            "Maximum background dBFS",
+            min_value=-100.0,
+            max_value=0.0,
+            value=-30.0,
+            step=1.0,
+            help="Reject louder backgrounds. More-negative values are quieter and stricter.",
+            key="clip_max_noise_dbfs",
+        )
+    with clip_cols[3]:
         per_species = st.number_input(
             "Best detections per species",
             min_value=0,
             max_value=1000,
             value=5,
             step=1,
-            help="Ranked using 70% confidence and 30% quietness. Use 0 for every detection passing both filters.",
+            help="Ranked using 50% confidence, 35% SNR, and 15% background quietness. Use 0 for all passing detections.",
             key="clip_per_species",
         )
 
@@ -2477,21 +2634,31 @@ def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
     with output_cols[2]:
         overwrite = st.checkbox("Overwrite matching clips", value=False, key="clip_overwrite")
 
-    with st.expander("Confidence versus recording level", expanded=True):
-        render_clip_quality_plot(detections, selected_detectors, min_confidence, max_mean_dbfs)
+    with st.expander("Signal, noise, and nightly patterns", expanded=True):
+        render_clip_snr_analytics(
+            detections,
+            selected_detectors,
+            min_confidence,
+            min_snr_db,
+            max_noise_dbfs,
+        )
 
-    missing_metrics = int(detections["MeanDbfs"].isna().sum())
+    with st.expander("Confidence versus mean recording level"):
+        render_clip_quality_plot(detections, selected_detectors, min_confidence)
+
+    missing_metrics = int(detections[["SnrDb", "NoiseDbfs"]].isna().any(axis=1).sum())
     if missing_metrics:
         st.warning(
-            f"{missing_metrics:,} detections have no audio metric and cannot be quality-ranked. "
-            "Append or rebuild the database to compute their mean dBFS values."
+            f"{missing_metrics:,} detections have no SNR metric and cannot be quality-ranked. "
+            "Use Compute missing audio quality metrics in the Database tab."
         )
 
     clip_df = select_quality_clip_detections(
         detections,
         selected_detectors,
         min_confidence,
-        max_mean_dbfs,
+        min_snr_db,
+        max_noise_dbfs,
         int(per_species) if per_species else None,
     )
     clip_groups = merge_clip_groups(clip_df, float(pad_seconds)) if not clip_df.empty else []
@@ -3241,6 +3408,23 @@ def render_processing_page(data_root, db_path):
                     returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
                 show_command_result(returncode, stdout, stderr)
 
+        if st.button(
+            "Compute missing audio quality metrics",
+            help="Backfill signal level, local background level, and SNR without re-importing detections.",
+        ):
+            command = [
+                sys.executable,
+                str(SCRIPTS_DIR / "build_db.py"),
+                "--data-root",
+                str(data_root),
+                "--db",
+                str(resolved_db_path),
+                "--audio-metrics-only",
+            ]
+            with st.spinner("Computing missing detection-level dBFS and SNR metrics..."):
+                returncode, stdout, stderr = run_captured_command(command, PROJECT_ROOT)
+            show_command_result(returncode, stdout, stderr)
+
         if manifest_path.exists():
             st.subheader("Manifest Preview")
             try:
@@ -3614,6 +3798,9 @@ with inspector_tab:
         "CommonName",
         "Confidence",
         "MeanDbfs",
+        "SignalDbfs",
+        "NoiseDbfs",
+        "SnrDb",
         "relative_audio_path",
         "BeginTime",
         "EndTime",

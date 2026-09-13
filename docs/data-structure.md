@@ -83,6 +83,23 @@ python scripts\build_db.py --data-root "."
 
 Use `--append` for brand-new datasets. Use the normal rebuild command when analyzer outputs changed or new audio files were added for datasets already in the database.
 
+### Detection audio quality
+
+The `detection_audio_metrics` table stores audio quality measurements for each detection:
+
+- `signal_dbfs`: RMS level during the detected interval.
+- `noise_dbfs`: robust local background estimate from the audio immediately before and after the detection.
+- `snr_db`: signal level minus local background level. Higher values indicate that the call or song stands out more clearly.
+- `mean_dbfs`: RMS level of the complete playback window, including its margins.
+
+Compute metrics only for detections that do not have them yet with:
+
+```powershell
+python scripts\build_db.py --data-root "." --audio-metrics-only
+```
+
+Use `--refresh-audio-metrics` with that command only when all existing measurements should be recalculated. The dashboard combines confidence, SNR, and background dBFS when selecting playback clips: confidence measures model certainty, SNR measures clarity, and background dBFS avoids favoring clips recorded in generally loud conditions.
+
 ## GitHub Safety
 
 The repository ignores everything below `datasets/` except `.gitkeep`. This prevents real audio files, coordinates, analyzer outputs, and generated databases from being published accidentally.

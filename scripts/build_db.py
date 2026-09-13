@@ -30,6 +30,8 @@ BIRDA_SUFFIXES = (
     ".csv",
 )
 METRIC_PADDING_SECONDS = 3.0
+METRIC_NOISE_GUARD_SECONDS = 0.25
+METRIC_NOISE_FRAME_SECONDS = 0.05
 
 
 def clean_id(value):
@@ -273,19 +275,66 @@ def recording_id(dataset_id, rel_audio_path):
     return hashlib.sha1(f"{dataset_id}|{rel_audio_path}".encode("utf-8")).hexdigest()
 
 
-def audio_segment_dbfs(audio_path, start, duration):
+def dbfs_from_samples(samples):
+    if len(samples) == 0:
+        return np.nan
+    rms = float(np.sqrt(np.mean(np.square(samples))))
+    return 20 * np.log10(max(rms, 1e-9))
+
+
+def noise_floor_dbfs(samples, sample_rate):
+    if len(samples) == 0:
+        return np.nan
+    frame_size = max(1, int(sample_rate * METRIC_NOISE_FRAME_SECONDS))
+    frame_levels = []
+    for start in range(0, len(samples), frame_size):
+        frame = samples[start : start + frame_size]
+        if len(frame) >= max(1, frame_size // 2):
+            frame_levels.append(dbfs_from_samples(frame))
+    if not frame_levels:
+        return dbfs_from_samples(samples)
+    return float(np.percentile(frame_levels, 20))
+
+
+def audio_detection_metrics(audio_path, begin_time, end_time):
+    metric_start = max(0.0, begin_time - METRIC_PADDING_SECONDS)
+    metric_duration = max(1.0, end_time - begin_time + 2 * METRIC_PADDING_SECONDS)
     with sf.SoundFile(str(audio_path)) as audio_file:
         sr = audio_file.samplerate
-        audio_file.seek(max(0, int(start * sr)))
-        frames = max(1, int(duration * sr))
+        audio_file.seek(max(0, int(metric_start * sr)))
+        frames = max(1, int(metric_duration * sr))
         y = audio_file.read(frames=frames, dtype="float32", always_2d=False)
         if y.ndim > 1:
             y = np.mean(y, axis=1)
 
     if len(y) == 0:
-        return np.nan
-    rms = float(np.sqrt(np.mean(np.square(y))))
-    return 20 * np.log10(max(rms, 1e-9))
+        return {
+            "mean_dbfs": np.nan,
+            "signal_dbfs": np.nan,
+            "noise_dbfs": np.nan,
+            "snr_db": np.nan,
+            "metric_start": metric_start,
+            "metric_duration": metric_duration,
+        }
+
+    signal_start = max(0, int((begin_time - metric_start) * sr))
+    signal_end = min(len(y), max(signal_start + 1, int((end_time - metric_start) * sr)))
+    guard = int(METRIC_NOISE_GUARD_SECONDS * sr)
+    noise_parts = [y[: max(0, signal_start - guard)], y[min(len(y), signal_end + guard) :]]
+    noise = np.concatenate([part for part in noise_parts if len(part)]) if any(len(part) for part in noise_parts) else np.array([])
+
+    mean_dbfs = dbfs_from_samples(y)
+    signal_dbfs = dbfs_from_samples(y[signal_start:signal_end])
+    background_dbfs = noise_floor_dbfs(noise, sr)
+    snr_db = signal_dbfs - background_dbfs if np.isfinite(signal_dbfs) and np.isfinite(background_dbfs) else np.nan
+    return {
+        "mean_dbfs": mean_dbfs,
+        "signal_dbfs": signal_dbfs,
+        "noise_dbfs": background_dbfs,
+        "snr_db": snr_db,
+        "metric_start": metric_start,
+        "metric_duration": metric_duration,
+    }
 
 
 def create_schema(con):
@@ -351,12 +400,19 @@ def create_schema(con):
         CREATE TABLE IF NOT EXISTS detection_audio_metrics (
             detection_id TEXT PRIMARY KEY,
             mean_dbfs DOUBLE,
+            signal_dbfs DOUBLE,
+            noise_dbfs DOUBLE,
+            snr_db DOUBLE,
             metric_start DOUBLE,
             metric_duration DOUBLE,
             computed_at TIMESTAMP
         )
         """
     )
+    metric_columns = con.execute("PRAGMA table_info('detection_audio_metrics')").df()["name"].tolist()
+    for column in ("signal_dbfs", "noise_dbfs", "snr_db"):
+        if column not in metric_columns:
+            con.execute(f"ALTER TABLE detection_audio_metrics ADD COLUMN {column} DOUBLE")
     con.execute("DROP TABLE IF EXISTS recording_audio_metrics")
 
 
@@ -566,6 +622,26 @@ def insert_missing_df(con, table_name, df, key_column):
     con.unregister(temp_name)
 
 
+def upsert_detection_audio_metrics(con, df):
+    if df.empty:
+        return
+    con.register("temp_detection_audio_metrics", df)
+    con.execute(
+        """
+        DELETE FROM detection_audio_metrics
+        WHERE detection_id IN (
+            SELECT detection_id FROM temp_detection_audio_metrics
+        )
+        """
+    )
+    columns = ", ".join(f'"{column}"' for column in df.columns)
+    con.execute(
+        f"INSERT INTO detection_audio_metrics ({columns}) "
+        f"SELECT {columns} FROM temp_detection_audio_metrics"
+    )
+    con.unregister("temp_detection_audio_metrics")
+
+
 def upsert_dataset(con, dataset):
     dataset_df = pd.DataFrame([dataset])
     con.register("temp_dataset_upsert", dataset_df)
@@ -594,6 +670,9 @@ def compute_missing_audio_metrics(con, data_root, refresh=False, limit=None):
         LEFT JOIN recordings r ON d.recording_id = r.recording_id
         LEFT JOIN detection_audio_metrics m ON d.detection_id = m.detection_id
         WHERE m.detection_id IS NULL
+           OR m.signal_dbfs IS NULL
+           OR m.noise_dbfs IS NULL
+           OR m.snr_db IS NULL
         ORDER BY d.DateTime
     """
     if limit:
@@ -618,11 +697,8 @@ def compute_missing_audio_metrics(con, data_root, refresh=False, limit=None):
 
         begin_time = float(row["BeginTime"])
         end_time = float(row["EndTime"])
-        metric_start = max(0.0, begin_time - METRIC_PADDING_SECONDS)
-        metric_duration = max(1.0, end_time - begin_time + 2 * METRIC_PADDING_SECONDS)
-
         try:
-            mean_dbfs = audio_segment_dbfs(audio_path, metric_start, metric_duration)
+            metrics = audio_detection_metrics(audio_path, begin_time, end_time)
         except Exception:
             skipped += 1
             continue
@@ -630,20 +706,18 @@ def compute_missing_audio_metrics(con, data_root, refresh=False, limit=None):
         rows.append(
             {
                 "detection_id": row["detection_id"],
-                "mean_dbfs": mean_dbfs,
-                "metric_start": metric_start,
-                "metric_duration": metric_duration,
+                **metrics,
                 "computed_at": pd.Timestamp.now("UTC").to_pydatetime(),
             }
         )
 
         if len(rows) % 500 == 0:
-            insert_df(con, "detection_audio_metrics", pd.DataFrame(rows))
+            upsert_detection_audio_metrics(con, pd.DataFrame(rows))
             print(f"Audio metrics: computed {index + 1}/{len(pending)}")
             rows = []
 
     if rows:
-        insert_df(con, "detection_audio_metrics", pd.DataFrame(rows))
+        upsert_detection_audio_metrics(con, pd.DataFrame(rows))
 
     print(f"Audio metrics ready: computed {len(pending) - skipped}, skipped {skipped}")
 
@@ -662,12 +736,12 @@ def main():
     parser.add_argument(
         "--skip-audio-metrics",
         action="store_true",
-        help="Skip computing detection-level mean dBFS metrics.",
+        help="Skip computing detection-level dBFS, background-noise, and SNR metrics.",
     )
     parser.add_argument(
         "--refresh-audio-metrics",
         action="store_true",
-        help="Delete and recompute all detection-level mean dBFS metrics.",
+        help="Delete and recompute all detection-level dBFS and SNR metrics.",
     )
     parser.add_argument(
         "--audio-metrics-limit",
@@ -733,7 +807,7 @@ def main():
         compute_missing_audio_metrics(
             con,
             data_root,
-            refresh=False,
+            refresh=args.refresh_audio_metrics,
             limit=args.audio_metrics_limit,
         )
 
