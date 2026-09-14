@@ -7,6 +7,72 @@ from pathlib import Path
 
 APP_DIR = Path(__file__).resolve().parent
 VENV_DIR = APP_DIR / ".venv"
+BIRDA_RELEASES_URL = "https://github.com/tphakala/birda/releases/latest"
+BIRDA_WINDOWS_GUIDE_URL = "https://github.com/tphakala/birda/blob/main/docs/windows-guide.md"
+
+
+def run_birda_check(command, label):
+    try:
+        result = subprocess.run(
+            command,
+            cwd=APP_DIR,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"  {label}: check failed ({exc})")
+        return False
+
+    output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
+    if output:
+        for line in output.splitlines():
+            print(f"    {line}")
+    if result.returncode != 0:
+        print(f"  {label}: command exited with code {result.returncode}")
+        return False
+    return True
+
+
+def print_birda_install_instructions():
+    print("\nBirda is optional and was not found on PATH.")
+    print("The dashboard and BirdNET Analyzer still work without it, but Run Birda will be unavailable.")
+    print("\nRecommended Windows setup:")
+    print(f"  1. Download the Windows CUDA installer or ZIP: {BIRDA_RELEASES_URL}")
+    print("  2. Install it, or extract the ZIP to a permanent folder such as C:\\Tools\\birda.")
+    print("  3. Add the folder containing birda.exe to your user PATH, then open a new PowerShell window.")
+    print("  4. Verify the executable: birda --version")
+    print("  5. Install a model: birda models install birdnet-v24")
+    print("  6. Inspect acceleration support: birda providers")
+    print(f"\nDetailed Windows, CUDA, and TensorRT guide: {BIRDA_WINDOWS_GUIDE_URL}")
+
+
+def check_birda():
+    print("\nChecking optional Birda integration...")
+    birda_path = shutil.which("birda")
+    if not birda_path:
+        print_birda_install_instructions()
+        return False
+
+    print(f"Birda executable: {birda_path}")
+    version_ok = run_birda_check([birda_path, "--version"], "Version")
+
+    print("  Configured model files:")
+    models_ok = run_birda_check([birda_path, "models", "check"], "Models")
+    if not models_ok:
+        print("  Install the recommended model with: birda models install birdnet-v24")
+
+    print("  Available inference providers:")
+    providers_ok = run_birda_check([birda_path, "providers"], "Providers")
+    if not providers_ok:
+        print("  Run 'birda providers' in a new PowerShell window to diagnose GPU support.")
+
+    if version_ok and models_ok:
+        print("Birda is ready for use from the dashboard.")
+    else:
+        print(f"Birda needs attention. See: {BIRDA_WINDOWS_GUIDE_URL}")
+    return version_ok and models_ok
 
 
 def venv_python():
@@ -85,6 +151,11 @@ def main():
         action="store_true",
         help="Install into the current Python instead of the local .venv. Not recommended.",
     )
+    parser.add_argument(
+        "--skip-birda-check",
+        action="store_true",
+        help="Skip the optional Birda executable, model, and provider checks.",
+    )
     args = parser.parse_args()
 
     print(f"Using Python: {sys.executable}")
@@ -92,6 +163,8 @@ def main():
     print("Requirements installed.")
     if not args.system:
         print(f"Dashboard environment: {venv_python()}")
+    if not args.skip_birda_check:
+        check_birda()
 
 
 if __name__ == "__main__":

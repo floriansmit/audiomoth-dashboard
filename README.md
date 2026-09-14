@@ -79,11 +79,19 @@ python install_requirements.py
 
 The installer creates a local virtual environment at `.venv/` and installs everything from `requirements.txt`. It prefers `uv` when available and otherwise falls back to `pip`.
 
+After installing the Python packages, it also checks the optional Birda integration. When Birda is present, the check reports its version, configured models, and available CPU/GPU providers. When it is absent, the installer prints the current Windows installation and model-setup instructions. A missing Birda executable does not fail the Python installation or disable BirdNET Analyzer.
+
 To force a specific installer:
 
 ```powershell
 python install_requirements.py --installer uv
 python install_requirements.py --installer pip
+```
+
+To omit the optional Birda check, for example in automated Python-only installations:
+
+```powershell
+python install_requirements.py --skip-birda-check
 ```
 
 To deliberately install into your current/global Python, add `--system`. This is not recommended because it may need administrator permissions.
@@ -205,7 +213,7 @@ By default, the BatDetect2 helper skips audio files that already have matching `
 python scripts\run_batdetect2.py --audio-dir "datasets\01_site_name\audio" --rerun-existing
 ```
 
-Birda is an optional external binary rather than a Python package in `requirements.txt`. For best performance on Windows/NVIDIA systems, install the Birda CUDA release from [tphakala/birda](https://github.com/tphakala/birda), add `birda.exe` to PATH, install a model with `birda models install birdnet-v24`, then restart the dashboard. TensorRT can be enabled separately by copying the TensorRT 10 DLLs into the Birda installation folder. The Processing page can then run Birda with GPU, TensorRT, batch-size, BirdNET/Perch model, and BattyBirdNET region settings.
+Birda is an optional external binary rather than a Python package in `requirements.txt`. The requirements installer checks whether it is ready and prints setup instructions when needed. For best performance on Windows/NVIDIA systems, install the Birda CUDA release from [Birda Releases](https://github.com/tphakala/birda/releases/latest), add `birda.exe` to PATH, install a model with `birda models install birdnet-v24`, then restart PowerShell and the dashboard. See the [Birda Windows guide](https://github.com/tphakala/birda/blob/main/docs/windows-guide.md) for CUDA and optional TensorRT setup. The Processing page can then run Birda with GPU, TensorRT, batch-size, BirdNET/Perch model, and BattyBirdNET region settings.
 
 ## Public Repository Notes
 
