@@ -300,6 +300,13 @@ def inject_design_system():
             }
             div[data-testid="stToolbar"] {
                 display: flex;
+                pointer-events: none;
+            }
+            div[data-testid="stToolbar"] * {
+                pointer-events: none;
+            }
+            div[data-testid="stToolbar"] button,
+            div[data-testid="stToolbar"] [role="button"] {
                 pointer-events: auto;
             }
             div[data-testid="stDecoration"],
