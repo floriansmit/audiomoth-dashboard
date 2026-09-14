@@ -2990,6 +2990,8 @@ def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
                 "Best per species", min_value=0, max_value=1000, value=20, step=1, help="Use 0 for all passing detections.", key="clip_custom_per_species"
             )
 
+    estimate_container = st.container()
+
     with st.expander("Output options"):
         output_cols = st.columns(3)
         with output_cols[0]:
@@ -3037,12 +3039,6 @@ def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
     clip_groups = merge_clip_groups(clip_df, float(pad_seconds)) if not clip_df.empty else []
     limited_groups = clip_groups[: int(max_clips)] if max_clips else clip_groups
     species_count = clip_df["CommonName"].nunique() if not clip_df.empty else 0
-    st.caption(
-        f"{len(eligible_clip_df):,} detections pass the quality thresholds. The per-species selection keeps "
-        f"{len(clip_df):,} detections across {species_count:,} species "
-        f"and would create/update up to {len(limited_groups):,} merged clips."
-    )
-
     projected_bytes, projected_seconds, readable_groups = estimate_clip_export_size(
         clip_groups,
         data_root,
@@ -3050,15 +3046,21 @@ def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
     )
     source_bytes = source_audio_size(str(dataset_dir / "audio"))
     reduction_percent = 100 * (1 - (projected_bytes / source_bytes)) if source_bytes else 0.0
-    estimate_cols = st.columns(3)
-    estimate_cols[0].metric("Source WAV collection", f"{source_bytes / (1024 ** 3):.2f} GB")
-    estimate_cols[1].metric(
-        "Estimated quality clips",
-        f"{projected_bytes / (1024 ** 3):.2f} GB",
-        help=f"Approximately {projected_seconds / 60:.1f} minutes across {readable_groups:,} readable clip groups.",
-    )
-    estimate_cols[2].metric("Estimated reduction", f"{max(0.0, reduction_percent):.1f}%")
-    st.caption("Estimate assumes a clean quality-only clip set; existing older clips remain on disk until removed separately.")
+    with estimate_container:
+        st.caption(
+            f"{len(eligible_clip_df):,} detections pass the quality thresholds. The per-species selection keeps "
+            f"{len(clip_df):,} detections across {species_count:,} species "
+            f"and would create/update up to {len(limited_groups):,} merged clips."
+        )
+        estimate_cols = st.columns(3)
+        estimate_cols[0].metric("Source WAV collection", f"{source_bytes / (1024 ** 3):.2f} GB")
+        estimate_cols[1].metric(
+            "Estimated quality clips",
+            f"{projected_bytes / (1024 ** 3):.2f} GB",
+            help=f"Approximately {projected_seconds / 60:.1f} minutes across {readable_groups:,} readable clip groups.",
+        )
+        estimate_cols[2].metric("Estimated reduction", f"{max(0.0, reduction_percent):.1f}%")
+        st.caption("Estimate assumes a clean quality-only clip set; existing older clips remain on disk until removed separately.")
 
     if st.button("Create detection clips"):
         progress_bar = st.progress(0.0, text="Creating clips: starting...")
