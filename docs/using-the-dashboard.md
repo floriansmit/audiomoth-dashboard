@@ -7,7 +7,9 @@ Select a project in the sidebar and press **Open Selected Project**. Bird and ba
 - **Overview** shows the project location, date range, observation count, and an interactive map.
 - **Histogram** compares species detection counts. Counts represent detector activity, not animal abundance.
 - **Matrix** shows species activity across hours, days, or weeks. Images are loaded when a Wikipedia thumbnail is available.
-- **Species** combines the selected species with a short Wikipedia profile, image, and distribution map when available.
+- **Species** combines the selected species with a short Wikipedia profile, image, and distribution map when available. Successful Wikipedia lookups are saved under `cache/wikipedia`, so the text and downloaded media load quickly and remain available offline on later runs.
+
+The cache is shared by all projects on that installation and is not committed to Git. Delete an individual species folder under `cache/wikipedia` if you want the dashboard to download a fresh copy on its next lookup.
 - **Temporal Pattern** plots the selected species at an independently chosen time resolution, including minute-level detail.
 - **Detection Inspector** filters individual detections by confidence. Select a table row to load the linked recording, audio controls, and spectrogram.
 

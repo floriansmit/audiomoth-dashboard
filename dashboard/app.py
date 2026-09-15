@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import os
 import html
 import io
@@ -14,6 +16,7 @@ import threading
 import time
 from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 import duckdb
 import librosa
@@ -52,6 +55,8 @@ APP_TITLE = "AudioMoth Dashboard"
 AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3"}
 WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
 WIKIPEDIA_HEADERS = {"User-Agent": "AudioMoth-Dashboard/1.0 (local Streamlit app)"}
+WIKIPEDIA_CACHE_DIR = PROJECT_ROOT / "cache" / "wikipedia"
+WIKIPEDIA_CACHE_VERSION = 1
 NOMINATIM_API = "https://nominatim.openstreetmap.org/search"
 WIKIPEDIA_NAME_ALIASES = {
     "blackbird": "Common blackbird",
@@ -1336,6 +1341,122 @@ def normalise_image_url(url):
     return f"https:{url}" if url.startswith("//") else url
 
 
+def wikipedia_cache_directory(species_name):
+    name = " ".join(str(species_name).split())
+    ascii_name = name.encode("ascii", "ignore").decode("ascii").lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_name).strip("-") or "species"
+    digest = hashlib.sha1(name.casefold().encode("utf-8")).hexdigest()[:10]
+    return WIKIPEDIA_CACHE_DIR / f"{slug}-{digest}"
+
+
+def cached_media_path(cache_dir, stem):
+    matches = sorted(cache_dir.glob(f"{stem}.*")) if cache_dir.exists() else []
+    return matches[0] if matches else None
+
+
+def atomic_write_json(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(".json.tmp")
+    temporary_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporary_path, path)
+
+
+def download_wikipedia_media(url, cache_dir, stem):
+    url = normalise_image_url(url)
+    if not url:
+        return None
+
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not (
+        hostname.endswith(".wikimedia.org") or hostname.endswith(".wikipedia.org")
+    ):
+        return None
+
+    response = requests.get(url, headers=WIKIPEDIA_HEADERS, timeout=20, stream=True)
+    response.raise_for_status()
+    content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
+    extensions = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+        "image/svg+xml": ".svg",
+    }
+    extension = extensions.get(content_type)
+    if not extension:
+        return None
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    target_path = cache_dir / f"{stem}{extension}"
+    temporary_path = cache_dir / f".{stem}{extension}.tmp"
+    total_bytes = 0
+    with temporary_path.open("wb") as handle:
+        for chunk in response.iter_content(chunk_size=64 * 1024):
+            if not chunk:
+                continue
+            total_bytes += len(chunk)
+            if total_bytes > 15 * 1024 * 1024:
+                handle.close()
+                temporary_path.unlink(missing_ok=True)
+                raise RuntimeError("Wikipedia image exceeds the 15 MB cache limit.")
+            handle.write(chunk)
+    os.replace(temporary_path, target_path)
+    return target_path
+
+
+def cached_profile_for_ui(species_name):
+    cache_dir = wikipedia_cache_directory(species_name)
+    metadata_path = cache_dir / "profile.json"
+    if not metadata_path.exists():
+        return None
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if metadata.get("cache_version") != WIKIPEDIA_CACHE_VERSION:
+        return None
+
+    image_path = cached_media_path(cache_dir, "profile-image")
+    range_map_path = cached_media_path(cache_dir, "range-map")
+    return {
+        "title": metadata.get("title"),
+        "extract": metadata.get("extract"),
+        "image_url": str(image_path) if image_path else metadata.get("image_source_url"),
+        "range_map_url": str(range_map_path) if range_map_path else metadata.get("range_map_source_url"),
+        "page_url": metadata.get("page_url"),
+        "details": metadata.get("details", {}),
+        "cached": True,
+    }
+
+
+@st.cache_data(show_spinner=False)
+def local_image_data_uri(path_string, modified_ns):
+    path = Path(path_string)
+    mime_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".svg": "image/svg+xml",
+    }
+    mime_type = mime_types.get(path.suffix.lower())
+    if not mime_type:
+        return path_string
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def image_source_for_html(source):
+    if not source:
+        return None
+    path = Path(source)
+    if path.exists():
+        return local_image_data_uri(str(path), path.stat().st_mtime_ns)
+    return source
+
+
 def shorten_text(text, max_characters=320):
     text = " ".join(str(text or "").split())
     if len(text) <= max_characters:
@@ -1410,6 +1531,10 @@ def extract_article_content(html, max_characters=320):
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def wikipedia_species_profile(species_name):
+    cached_profile = cached_profile_for_ui(species_name)
+    if cached_profile:
+        return cached_profile
+
     search_name = WIKIPEDIA_NAME_ALIASES.get(species_name.lower(), species_name)
     query_data = wikipedia_request(
         {
@@ -1439,19 +1564,50 @@ def wikipedia_species_profile(species_name):
     article_html = article_data.get("parse", {}).get("text", {}).get("*", "")
     details, range_map_url = extract_article_content(article_html)
 
-    return {
+    profile = {
         "title": title,
         "extract": shorten_text(page.get("extract"), 420),
-        "image_url": page.get("thumbnail", {}).get("source"),
-        "range_map_url": range_map_url,
+        "image_source_url": normalise_image_url(page.get("thumbnail", {}).get("source")),
+        "range_map_source_url": normalise_image_url(range_map_url),
         "page_url": page.get("fullurl"),
         "details": details,
+    }
+    cache_dir = wikipedia_cache_directory(species_name)
+    image_path = None
+    range_map_path = None
+    try:
+        image_path = download_wikipedia_media(profile["image_source_url"], cache_dir, "profile-image")
+    except Exception:
+        pass
+    try:
+        range_map_path = download_wikipedia_media(profile["range_map_source_url"], cache_dir, "range-map")
+    except Exception:
+        pass
+
+    atomic_write_json(
+        cache_dir / "profile.json",
+        {
+            "cache_version": WIKIPEDIA_CACHE_VERSION,
+            "species_name": species_name,
+            "search_name": search_name,
+            "cached_at": datetime.now().astimezone().isoformat(),
+            **profile,
+        },
+    )
+    return {
+        "title": profile["title"],
+        "extract": profile["extract"],
+        "image_url": str(image_path) if image_path else profile["image_source_url"],
+        "range_map_url": str(range_map_path) if range_map_path else profile["range_map_source_url"],
+        "page_url": profile["page_url"],
+        "details": profile["details"],
+        "cached": True,
     }
 
 
 @st.cache_data(ttl=604800, show_spinner=False)
 def wikipedia_species_images(species_names):
-    """Fetch small species thumbnails in batches without loading full profiles."""
+    """Load cached thumbnails first, then download only missing species images."""
     species_names = tuple(dict.fromkeys(str(name) for name in species_names if str(name).strip()))
     lookup_titles = {
         name: WIKIPEDIA_NAME_ALIASES.get(name.lower(), name)
@@ -1459,8 +1615,19 @@ def wikipedia_species_images(species_names):
     }
     images = {name: None for name in species_names}
 
-    for start_index in range(0, len(species_names), 40):
-        batch_names = species_names[start_index : start_index + 40]
+    missing_names = []
+    for name in species_names:
+        cache_dir = wikipedia_cache_directory(name)
+        image_path = cached_media_path(cache_dir, "thumbnail")
+        if image_path is None:
+            image_path = cached_media_path(cache_dir, "profile-image")
+        if image_path:
+            images[name] = str(image_path)
+        else:
+            missing_names.append(name)
+
+    for start_index in range(0, len(missing_names), 40):
+        batch_names = missing_names[start_index : start_index + 40]
         requested_titles = [lookup_titles[name] for name in batch_names]
         try:
             data = wikipedia_request(
@@ -1501,7 +1668,14 @@ def wikipedia_species_images(species_names):
             requested = lookup_titles[name]
             page = pages_by_title.get(resolved_title(requested).casefold())
             if page:
-                images[name] = page.get("thumbnail", {}).get("source")
+                source_url = normalise_image_url(page.get("thumbnail", {}).get("source"))
+                try:
+                    image_path = download_wikipedia_media(
+                        source_url, wikipedia_cache_directory(name), "thumbnail"
+                    )
+                except Exception:
+                    image_path = None
+                images[name] = str(image_path) if image_path else source_url
 
     return images
 
@@ -1549,7 +1723,7 @@ def render_occurrence_matrix(occurrence_matrix, time_axis_label):
     rows = []
     for species, values in occurrence_matrix.iterrows():
         safe_species = html.escape(str(species))
-        image_url = image_urls.get(str(species))
+        image_url = image_source_for_html(image_urls.get(str(species)))
         if image_url:
             image_html = (
                 f'<img class="species-matrix-photo" src="{html.escape(image_url, quote=True)}" '
@@ -4146,6 +4320,8 @@ with species_tab:
                         st.write(profile["extract"])
                     if profile["page_url"]:
                         st.markdown(f"[Wikipedia]({profile['page_url']})")
+                    if profile.get("cached"):
+                        st.caption("Profile saved locally for faster loading and offline reuse.")
                 with map_col:
                     if profile["range_map_url"]:
                         st.image(profile["range_map_url"], use_container_width=True)

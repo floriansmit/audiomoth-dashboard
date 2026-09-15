@@ -26,7 +26,7 @@ The app is designed for local field-recording projects. Audio files, analyzer ou
 - Store Birda, BirdNET, and BatDetect2 outputs separately.
 - Build or update a DuckDB database from a manifest.
 - Browse detections by dataset, species, date, hour, confidence, and detector.
-- Show species notes and media from Wikipedia when available.
+- Show species notes and media from Wikipedia, with a persistent local cache for fast and offline reuse after the first successful lookup.
 - Select a detection directly from the inspector table to load its audio and spectrogram.
 - Prefer generated playback clips when available, including 10x time expansion for ultrasonic bat calls.
 - Inspect BatDetect2 pulse predictions, frequency-band sequences, pulse spacing, and cautious plain-language call-shape notes.

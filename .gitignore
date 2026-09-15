@@ -17,6 +17,9 @@ env/
 .streamlit/secrets.toml
 *.log
 
+# Downloaded Wikipedia text and media (rebuilt automatically)
+cache/wikipedia/**
+
 # Local datasets and generated databases
 datasets/**
 !datasets/
