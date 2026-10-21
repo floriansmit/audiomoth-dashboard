@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use AudioMoth Dashboard in research, please cite this software and the acoustic analyzer and model used."
+title: "AudioMoth Dashboard"
+type: software
+authors:
+  - family-names: "Smit"
+    given-names: "Florian W.H."
+repository-code: "https://github.com/floriansmit/audiomoth-dashboard"
+url: "https://github.com/floriansmit/audiomoth-dashboard"
+license: MIT

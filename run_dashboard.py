@@ -7,13 +7,16 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DASHBOARD_APP = PROJECT_ROOT / "dashboard" / "app.py"
-VENV_PYTHON = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
 APP_TITLE = "AudioMoth Dashboard"
 
 
 def dashboard_python():
-    if VENV_PYTHON.exists():
-        return VENV_PYTHON
+    if sys.platform.startswith("win"):
+        venv_python = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
+    else:
+        venv_python = PROJECT_ROOT / ".venv" / "bin" / "python"
+    if venv_python.exists():
+        return venv_python
     return Path(sys.executable)
 
 

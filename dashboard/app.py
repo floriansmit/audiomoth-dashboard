@@ -1300,7 +1300,7 @@ def map_deck(points, selected_dataset_id=None, satellite=True, zoom=7):
 
 def satellite_map_figure(points, zoom=12):
     center = {"lat": float(points["lat"].mean()), "lon": float(points["lon"].mean())}
-    figure = px.scatter_mapbox(
+    figure = px.scatter_map(
         points,
         lat="lat",
         lon="lon",
@@ -1310,8 +1310,8 @@ def satellite_map_figure(points, zoom=12):
     )
     figure.update_traces(marker={"size": 15, "color": "#ffd246"})
     figure.update_layout(
-        mapbox_style="white-bg",
-        mapbox_layers=[
+        map_style="white-bg",
+        map_layers=[
             {
                 "below": "traces",
                 "sourcetype": "raster",
@@ -1867,7 +1867,7 @@ def render_gallery(gallery_df, data_root, gallery_type):
             with image_col:
                 image_url = gallery_image_urls.get(species)
                 if image_url:
-                    st.image(image_url, use_container_width=True)
+                    st.image(image_url, width="stretch")
                 st.subheader(species)
                 st.caption(f"{len(species_df):,} detections")
 
@@ -1880,7 +1880,7 @@ def render_gallery(gallery_df, data_root, gallery_type):
                     st.dataframe(
                         display_best,
                         hide_index=True,
-                        use_container_width=True,
+                        width="stretch",
                         column_config={
                             "Confidence": st.column_config.NumberColumn(format="%.3f"),
                             "Mean dBFS": st.column_config.NumberColumn(format="%.1f"),
@@ -2940,7 +2940,7 @@ def render_clip_snr_analytics(detections, detectors, min_confidence, min_snr_db,
         fig.add_vline(x=float(min_confidence), line_dash="dash", line_color="#e4572e")
         fig.add_hline(y=float(min_snr_db), line_dash="dash", line_color="#2a9d8f")
         fig.update_layout(height=520, margin={"l": 10, "r": 10, "t": 20, "b": 10})
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         st.caption(
             "The upper-right area contains confident detections that stand clearly above their background. "
             "Color distinguishes quiet backgrounds from loud ones."
@@ -2975,7 +2975,7 @@ def render_clip_snr_analytics(detections, detectors, min_confidence, min_snr_db,
         )
         level_fig.add_hline(y=float(max_noise_dbfs), line_dash="dash", line_color="#202124")
         level_fig.update_layout(height=400, xaxis_title="Recording time", margin={"l": 10, "r": 10, "t": 20, "b": 10})
-        st.plotly_chart(level_fig, use_container_width=True)
+        st.plotly_chart(level_fig, width="stretch")
 
         snr_fig = px.bar(
             timeline,
@@ -2987,7 +2987,7 @@ def render_clip_snr_analytics(detections, detectors, min_confidence, min_snr_db,
         )
         snr_fig.add_hline(y=float(min_snr_db), line_dash="dash", line_color="#e4572e")
         snr_fig.update_layout(height=340, margin={"l": 10, "r": 10, "t": 20, "b": 10})
-        st.plotly_chart(snr_fig, use_container_width=True)
+        st.plotly_chart(snr_fig, width="stretch")
         st.caption(
             "Values are 15-minute medians across detection windows. This describes detected clips, not continuous ambient sound."
         )
@@ -3048,7 +3048,7 @@ def render_clip_quality_plot(detections, detectors, min_confidence):
     )
     fig.add_vline(x=float(min_confidence), line_dash="dash", line_color="#2a9d8f")
     fig.update_layout(height=500, margin={"l": 10, "r": 10, "t": 20, "b": 10})
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     correlation_cols = st.columns(3)
     correlation_cols[0].metric("Pearson correlation", f"{pearson:.3f}", help="Linear relationship; values near zero indicate little linear association.")
@@ -3069,7 +3069,7 @@ def render_clip_quality_plot(detections, detectors, min_confidence):
         )
     st.dataframe(
         pd.DataFrame(detector_correlations),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "Pearson": st.column_config.NumberColumn(format="%.3f"),
@@ -3395,6 +3395,16 @@ def update_folder_picker_path(key, path):
     st.session_state[f"{key}_version"] = int(st.session_state.get(f"{key}_version", 0)) + 1
 
 
+def open_folder(path):
+    path = str(Path(path).resolve())
+    if sys.platform.startswith("win"):
+        os.startfile(path)
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
+
+
 def folder_picker(label, initial_path, key):
     state_key = f"{key}_path"
     version_key = f"{key}_version"
@@ -3429,9 +3439,9 @@ def folder_picker(label, initial_path, key):
                 st.rerun(scope="fragment")
 
     with nav_cols[1]:
-        if st.button("Open in Explorer", key=f"{key}_explorer"):
+        if st.button("Open folder", key=f"{key}_explorer"):
             explorer_path = current_path if current_path.exists() else current_path.parent
-            subprocess.Popen(["explorer", str(explorer_path)])
+            open_folder(explorer_path)
 
     with nav_cols[2]:
         if st.button("Parent folder", key=f"{key}_parent"):
@@ -3760,9 +3770,9 @@ def render_processing_page(data_root, db_path):
             st.success("This dataset has audio and no analyzer outputs yet. It is ready to analyze.")
         elif target_count:
             st.info("This dataset already has audio and some analyzer outputs.")
-        if st.button("Open dataset audio folder in Explorer"):
+        if st.button("Open dataset audio folder"):
             dataset_audio_dir.mkdir(parents=True, exist_ok=True)
-            subprocess.Popen(["explorer", str(dataset_audio_dir)])
+            open_folder(dataset_audio_dir)
         if st.button("Refresh file status"):
             processing_dataset_inventory.clear()
             cached_audio_count.clear()
@@ -3922,7 +3932,7 @@ def render_processing_page(data_root, db_path):
                 },
             ]
         )
-        st.dataframe(database_status, hide_index=True, use_container_width=True)
+        st.dataframe(database_status, hide_index=True, width="stretch")
 
         output_total = birda_output_count + birdnet_output_count + batdetect_output_count
         current_output_counts = {
@@ -3957,7 +3967,7 @@ def render_processing_page(data_root, db_path):
             "This one button is suitable for both new and existing projects. It regenerates the manifest, then replaces only "
             "the selected project's database rows with the current analyzer outputs. Other projects remain untouched."
         )
-        if st.button("Update selected project", type="primary", use_container_width=True):
+        if st.button("Update selected project", type="primary", width="stretch"):
             manifest_command = [
                 sys.executable,
                 str(SCRIPTS_DIR / "generate_manifest.py"),
@@ -4028,7 +4038,7 @@ def render_processing_page(data_root, db_path):
         if manifest_path.exists():
             st.subheader("Manifest Preview")
             try:
-                st.dataframe(pd.read_csv(manifest_path), use_container_width=True)
+                st.dataframe(pd.read_csv(manifest_path), width="stretch")
             except Exception as exc:
                 st.warning(f"Could not preview manifest: {exc}")
 
@@ -4067,7 +4077,7 @@ with st.sidebar:
         st.image(str(LOGO_PATH), width=220)
     st.markdown(f"### {APP_TITLE}")
     st.header("Project")
-    if st.button("Create Project", use_container_width=True):
+    if st.button("Create Project", width="stretch"):
         st.session_state["processing_dataset_folder"] = "Create new dataset"
         st.session_state["view_mode"] = "Processing"
         st.rerun()
@@ -4081,7 +4091,7 @@ if not resolved_db_path.exists() and view_mode == "Processing":
         st.header("Navigate")
         for page_name in ["Dashboard", "Processing", "Bird highlights", "Bat highlights"]:
             button_type = "primary" if st.session_state["view_mode"] == page_name else "secondary"
-            if st.button(page_name, use_container_width=True, type=button_type):
+            if st.button(page_name, width="stretch", type=button_type):
                 st.session_state["view_mode"] = page_name
                 st.rerun()
     render_processing_page(data_root, db_path)
@@ -4113,14 +4123,14 @@ selected_dataset_label = st.sidebar.selectbox("Selected project", list(dataset_l
 selected_dataset_id = dataset_labels[selected_dataset_label]
 
 with st.sidebar:
-    if st.button("Open Selected Project", use_container_width=True):
+    if st.button("Open Selected Project", width="stretch"):
         st.session_state["view_mode"] = "Dashboard"
         st.rerun()
 
     st.header("Navigate")
     for page_name in ["Dashboard", "Processing", "Bird highlights", "Bat highlights"]:
         button_type = "primary" if st.session_state["view_mode"] == page_name else "secondary"
-        if st.button(page_name, use_container_width=True, type=button_type):
+        if st.button(page_name, width="stretch", type=button_type):
             st.session_state["view_mode"] = page_name
             st.rerun()
 
@@ -4163,7 +4173,7 @@ with st.sidebar:
     if not points.empty:
         st.subheader("Locations")
         sidebar_deck = map_deck(points, selected_dataset_id=selected_dataset_id, satellite=False)
-        st.pydeck_chart(sidebar_deck, use_container_width=True)
+        st.pydeck_chart(sidebar_deck, width="stretch")
     else:
         st.caption("No dataset coordinates saved yet.")
 
@@ -4219,7 +4229,7 @@ with overview_tab:
         if map_style == "Satellite":
             st.plotly_chart(
                 satellite_map_figure(selected_points),
-                use_container_width=True,
+                width="stretch",
                 config={"scrollZoom": True, "displaylogo": False},
             )
         else:
@@ -4229,7 +4239,7 @@ with overview_tab:
                 satellite=False,
                 zoom=12,
             )
-            st.pydeck_chart(selected_deck, use_container_width=True)
+            st.pydeck_chart(selected_deck, width="stretch")
     else:
         st.info("No coordinates saved for this project yet.")
 
@@ -4239,7 +4249,7 @@ with histogram_tab:
     col1, col2 = st.columns([1, 2])
 
     with col1:
-        st.dataframe(species_counts, hide_index=True, use_container_width=True, height=800)
+        st.dataframe(species_counts, hide_index=True, width="stretch", height=800)
 
     with col2:
         fig = px.bar(
@@ -4257,7 +4267,7 @@ with histogram_tab:
             tickvals=[1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000],
             ticktext=["1", "2", "5", "10", "20", "50", "100", "200", "500", "1k", "2k", "5k", "10k"],
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 with matrix_tab:
     st.header("Species Occurrence Matrix")
@@ -4313,7 +4323,7 @@ with species_tab:
                 image_col, text_col, map_col = st.columns([1, 2, 1])
                 with image_col:
                     if profile["image_url"]:
-                        st.image(profile["image_url"], use_container_width=True)
+                        st.image(profile["image_url"], width="stretch")
                 with text_col:
                     st.subheader(profile["title"])
                     if profile["extract"]:
@@ -4324,7 +4334,7 @@ with species_tab:
                         st.caption("Profile saved locally for faster loading and offline reuse.")
                 with map_col:
                     if profile["range_map_url"]:
-                        st.image(profile["range_map_url"], use_container_width=True)
+                        st.image(profile["range_map_url"], width="stretch")
 
                 details = profile.get("details", {})
                 if details:
@@ -4371,7 +4381,7 @@ with temporal_tab:
         title=f"{temporal_title} detections of {selected_species}",
     )
     fig.update_layout(xaxis_title=temporal_settings["axis"], yaxis_title="Detections")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 with inspector_tab:
     st.header("Detection Inspector")
@@ -4410,7 +4420,7 @@ with inspector_tab:
     visible_columns = [column for column in visible_columns if column in filtered_df.columns]
 
     if filtered_df.empty:
-        st.dataframe(filtered_df[visible_columns], use_container_width=True)
+        st.dataframe(filtered_df[visible_columns], width="stretch")
         st.warning("No detections match the selected filters.")
     else:
         st.caption("Select a detection row to load its audio and spectrogram.")

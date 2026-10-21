@@ -4,6 +4,12 @@ AudioMoth Dashboard is a local Streamlit app for exploring AudioMoth recordings 
 
 The app is designed for local field-recording projects. Audio files, analyzer outputs, manifests, and DuckDB databases are ignored by Git by default.
 
+## About AudioMoth
+
+[AudioMoth](https://www.openacousticdevices.info/audiomoth) is a low-cost, open-source, full-spectrum acoustic logging device developed by [Open Acoustic Devices](https://www.openacousticdevices.info/). It records uncompressed WAV files to a microSD card at audible and ultrasonic sample rates, making it useful for passive monitoring of birds, bats, other wildlife, and environmental sound.
+
+This repository is an independent companion application for organizing, analyzing, and exploring recordings made with AudioMoth and compatible recorders. It is not an official Open Acoustic Devices application and does not replace the AudioMoth configuration software.
+
 ## Screenshots
 
 ### Project overview
@@ -70,6 +76,8 @@ datasets/
 `datasets/` is intentionally ignored by Git except for `.gitkeep`.
 
 ## Install
+
+The dashboard is primarily developed and tested on Windows with Python 3.13. The launcher also supports the conventional `.venv/bin/python` layout on macOS and Linux, but the external analyzer setup and native folder picker can vary by operating system.
 
 From the project root:
 
@@ -220,6 +228,10 @@ Birda is an optional external binary rather than a Python package in `requiremen
 Do not commit real field recordings, generated analyzer outputs, or DuckDB databases unless you explicitly intend to publish those data. The included `.gitignore` keeps these local by default.
 
 For troubleshooting, see [docs/troubleshooting.md](docs/troubleshooting.md).
+
+Classifier results are model predictions, not verified species records or animal-abundance estimates. Review important detections manually and follow the documentation and citation guidance of the analyzer and model you use.
+
+Contributions and bug reports are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). Academic users can find citation metadata in [CITATION.cff](CITATION.cff), and security-reporting guidance is in [SECURITY.md](SECURITY.md).
 
 ## Acknowledgements
 
