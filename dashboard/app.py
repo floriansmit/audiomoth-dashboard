@@ -4356,7 +4356,11 @@ with species_tab:
                     if profile["extract"]:
                         st.write(profile["extract"])
                     if profile["page_url"]:
-                        st.markdown(f"[Wikipedia]({profile['page_url']})")
+                        st.link_button(
+                            "Open Wikipedia",
+                            profile["page_url"],
+                            icon=":material/open_in_new:",
+                        )
                     if profile.get("cached"):
                         st.caption("Profile saved locally for faster loading and offline reuse.")
                 with map_col:
