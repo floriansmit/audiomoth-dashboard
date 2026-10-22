@@ -43,3 +43,7 @@ datasets/**
 Thumbs.db
 .vscode/
 .idea/
+
+# Curated, compact recordings shipped with the optional demo projects
+!demo_data/
+!demo_data/**

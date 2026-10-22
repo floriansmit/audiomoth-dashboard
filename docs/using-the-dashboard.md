@@ -2,6 +2,8 @@
 
 Select a project in the sidebar and press **Open Selected Project**. Bird and bat views remain separate even when they share the same source audio folder.
 
+On a clean installation, press **Install demo projects** to add the included Copenhagen sample. It contains three short bird WAVs, three ultrasonic bat WAVs, and their prepared Birda/BatDetect2 tables, so no analyzer run is needed before exploring the dashboard.
+
 ## Dashboard Tabs
 
 - **Overview** shows the project location, date range, observation count, and an interactive map.

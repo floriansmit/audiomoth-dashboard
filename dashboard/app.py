@@ -57,6 +57,7 @@ WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
 WIKIPEDIA_HEADERS = {"User-Agent": "AudioMoth-Dashboard/1.0 (local Streamlit app)"}
 WIKIPEDIA_CACHE_DIR = PROJECT_ROOT / "cache" / "wikipedia"
 WIKIPEDIA_CACHE_VERSION = 1
+DEMO_DATA_DIR = PROJECT_ROOT / "demo_data" / "datasets"
 NOMINATIM_API = "https://nominatim.openstreetmap.org/search"
 WIKIPEDIA_NAME_ALIASES = {
     "blackbird": "Common blackbird",
@@ -126,6 +127,32 @@ def render_first_run_page(data_root, db_path):
         """
     )
     st.caption("The manifest is generated from dataset folders. It is not required before the first processing run.")
+    if DEMO_DATA_DIR.exists():
+        st.divider()
+        st.subheader("Try the included demo")
+        st.write(
+            "Install two small Copenhagen projects containing three bird recordings and three ultrasonic bat recordings. "
+            "Analyzer results are included, so the dashboard, galleries, playback, and spectrograms work immediately."
+        )
+        if st.button("Install demo projects", type="primary"):
+            command = [
+                sys.executable,
+                str(SCRIPTS_DIR / "install_demo.py"),
+                "--data-root",
+                str(data_root),
+                "--db",
+                str(db_path),
+            ]
+            with st.spinner("Installing demo recordings and building the database..."):
+                result = subprocess.run(command, cwd=PROJECT_ROOT, capture_output=True, text=True)
+            if result.returncode == 0:
+                st.success("Demo projects installed. Opening the dashboard...")
+                st.cache_data.clear()
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                st.error("The demo installation did not complete.")
+                st.code((result.stdout + "\n" + result.stderr).strip())
 
 
 def has_platform_schema(con):

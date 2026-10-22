@@ -107,3 +107,5 @@ Use `--refresh-audio-metrics` with that command only when all existing measureme
 ## GitHub Safety
 
 The repository ignores everything below `datasets/` except `.gitkeep`. This prevents real audio files, coordinates, analyzer outputs, and generated databases from being published accidentally.
+
+The only tracked audio is the deliberately curated sample under `demo_data/`. Its six short excerpts and matching analyzer tables are copied into `datasets/` only when the demo installer is run. See `demo_data/README.md` for attribution and recording rights.

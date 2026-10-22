@@ -12,7 +12,7 @@ Then restart the dashboard. Do not disable TLS certificate verification.
 
 ## The Dashboard Opens But Says There Is No Database
 
-This is expected on a clean clone. Open `Processing` in the sidebar, create or select a dataset folder, run analyzers, regenerate the manifest, then build or append to the database.
+This is expected on a clean clone. Press **Install demo projects** to open the included six-recording Copenhagen sample immediately. To use your own data instead, open `Processing` in the sidebar, create or select a dataset folder, run analyzers, regenerate the manifest, then build or append to the database.
 
 ## The Manifest Is Missing
 

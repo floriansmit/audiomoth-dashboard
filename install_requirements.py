@@ -9,6 +9,12 @@ APP_DIR = Path(__file__).resolve().parent
 VENV_DIR = APP_DIR / ".venv"
 BIRDA_RELEASES_URL = "https://github.com/tphakala/birda/releases/latest"
 BIRDA_WINDOWS_GUIDE_URL = "https://github.com/tphakala/birda/blob/main/docs/windows-guide.md"
+DEMO_INSTALLER = APP_DIR / "scripts" / "install_demo.py"
+DEMO_DATASET_DIRS = (
+    APP_DIR / "datasets" / "demo_copenhagen_birds",
+    APP_DIR / "datasets" / "demo_copenhagen_bats",
+)
+DEMO_DATABASE = APP_DIR / "datasets" / "audiomoth.duckdb"
 
 
 def run_birda_check(command, label):
@@ -136,6 +142,33 @@ def install(requirements_path, installer, use_system):
     print(f"Installing packages from {requirements_path.name} with {installer}")
     print(f"Target Python: {python_path}")
     subprocess.run(command, cwd=APP_DIR, check=True)
+    return python_path
+
+
+def demo_is_installed():
+    return DEMO_DATABASE.exists() and all(path.exists() for path in DEMO_DATASET_DIRS)
+
+
+def ask_to_install_demo():
+    if not sys.stdin.isatty():
+        print("\nDemo prompt skipped because this installation is not interactive.")
+        print("Install it later with: python scripts\\install_demo.py")
+        return False
+
+    while True:
+        answer = input("\nWould you like to install the Copenhagen demo projects now? [y/N]: ").strip().lower()
+        if answer in {"", "n", "no"}:
+            return False
+        if answer in {"y", "yes"}:
+            return True
+        print("Please answer y or n.")
+
+
+def install_demo(python_path):
+    if not DEMO_INSTALLER.exists():
+        raise FileNotFoundError(f"Demo installer not found: {DEMO_INSTALLER}")
+    print("\nInstalling the Copenhagen bird and bat demo projects...")
+    subprocess.run([str(python_path), str(DEMO_INSTALLER)], cwd=APP_DIR, check=True)
 
 
 def main():
@@ -156,15 +189,34 @@ def main():
         action="store_true",
         help="Skip the optional Birda executable, model, and provider checks.",
     )
+    demo_group = parser.add_mutually_exclusive_group()
+    demo_group.add_argument(
+        "--install-demo",
+        action="store_true",
+        help="Install the packaged Copenhagen demo without prompting.",
+    )
+    demo_group.add_argument(
+        "--no-demo",
+        action="store_true",
+        help="Do not prompt for or install the packaged demo.",
+    )
     args = parser.parse_args()
 
     print(f"Using Python: {sys.executable}")
-    install(APP_DIR / "requirements.txt", args.installer, args.system)
+    python_path = install(APP_DIR / "requirements.txt", args.installer, args.system)
     print("Requirements installed.")
     if not args.system:
         print(f"Dashboard environment: {venv_python()}")
     if not args.skip_birda_check:
         check_birda()
+
+    if demo_is_installed():
+        print("\nCopenhagen demo projects are already installed.")
+    elif args.install_demo or (not args.no_demo and ask_to_install_demo()):
+        install_demo(python_path)
+    else:
+        print("Demo installation skipped. You can install it later from the dashboard or with:")
+        print("  python scripts\\install_demo.py")
 
 
 if __name__ == "__main__":
