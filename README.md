@@ -180,14 +180,14 @@ datasets/
     audio/
       20230701_221500.WAV
     birda/
-      20230701_221500.BirdNET.results.csv
+      20230701_221500.Birda.results.csv
     birdnet/
       20230701_221500.BirdNET.selection.table.txt
     batdetect2_outputs/
       20230701_221500.WAV.csv
 ```
 
-Birda output should stay in `birda/`. BirdNET Analyzer output should stay in `birdnet/`. BatDetect2 output should stay in `batdetect2_outputs/`. This keeps detector provenance explicit in the database.
+Birda output should stay in `birda/` and is stored by the dashboard as `.Birda.results.csv`. BirdNET Analyzer output should stay in `birdnet/` as `.BirdNET.selection.table.txt`. BatDetect2 output should stay in `batdetect2_outputs/`. This keeps detector provenance explicit in filenames and in the database. Older Birda files ending in `.BirdNET.results.csv` remain supported and are renamed automatically when the project is opened in Processing.
 
 Playback clips can be generated from the Processing page after the database has been updated. The clipper uses all database detections that share the selected dataset's `audio/` folder, so bird and bat detections protect the same original WAV files. Balanced, curated, and broad presets make the quality controls approachable; Custom exposes confidence, minimum-SNR, maximum-background-dBFS, and per-species limits. The best detections per species are ranked using 50% confidence, 35% SNR, and 15% background quietness. Processing also provides confidence/SNR analytics and 15-minute signal, background, and SNR timelines. Overlapping windows are merged using the selected margin. A live estimate compares the projected quality-clip size with the source WAV collection before export. Clips are written to `clips/` with a `clips_manifest.csv`; original WAV files are not deleted by the app.
 

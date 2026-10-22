@@ -10,9 +10,13 @@ datasets/
   audiomoth.duckdb
   01_site_name/
     audio/
+      20230701_221500.WAV
     birda/
+      20230701_221500.Birda.results.csv
     birdnet/
+      20230701_221500.BirdNET.selection.table.txt
     batdetect2_outputs/
+      20230701_221500.WAV.csv
 ```
 
 Folder purpose:
@@ -36,11 +40,13 @@ The original BirdNET files do not need audio paths. `scripts/build_db.py` links 
 
 ## Birda Output
 
-Birda outputs should stay in `birda/`. The builder imports Birda CSV files with columns like:
+Birda outputs should stay in `birda/`. Files produced through the dashboard use the `.Birda.results.csv` suffix. The builder imports Birda CSV files with columns like:
 
 ```text
 Start (s)  End (s)  Scientific name  Common name  Confidence  File
 ```
+
+Birda's native CLI currently writes `.BirdNET.results.csv`; this identifies its BirdNET-compatible result format but can obscure which analyzer created the file. The dashboard therefore normalizes Birda outputs to `.Birda.results.csv`, while continuing to recognize the native legacy name. Temporary compatibility links preserve Birda's skip-existing behavior without keeping duplicate result files.
 
 Birda is the recommended backend when performance matters because its Windows CUDA build can use NVIDIA GPUs and it skips existing outputs unless `--force` is used. Install Birda separately from [tphakala/birda](https://github.com/tphakala/birda), then use the Processing page to run it.
 

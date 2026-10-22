@@ -37,6 +37,9 @@ datasets/**
 *.duckdb.tmp
 *.BirdNET.selection.table.txt
 *.BirdNET.selection.table.csv
+*.Birda.results.csv
+*.Birda.results.json
+*.Birda.results.parquet
 
 # OS/editor noise
 .DS_Store

@@ -53,6 +53,20 @@ DEFAULT_DB_PATH = PROJECT_ROOT / "datasets" / "audiomoth.duckdb"
 LOGO_PATH = APP_DIR / "assets" / "audiomoth-bird-bat-logo-sidebar.png"
 APP_TITLE = "AudioMoth Dashboard"
 AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3"}
+BIRDA_OUTPUT_SUFFIXES = (
+    ".Birda.results.csv",
+    ".BirdNET.results.csv",
+)
+BIRDA_NATIVE_TO_CANONICAL_SUFFIX = {
+    ".BirdNET.results.csv": ".Birda.results.csv",
+    ".BirdNET.json": ".Birda.results.json",
+    ".BirdNET.results.parquet": ".Birda.results.parquet",
+}
+DETECTOR_DISPLAY_NAMES = {
+    "birda": "Birda",
+    "birdnet": "BirdNET Analyzer",
+    "batdetect2": "BatDetect2",
+}
 WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
 WIKIPEDIA_HEADERS = {"User-Agent": "AudioMoth-Dashboard/1.0 (local Streamlit app)"}
 WIKIPEDIA_CACHE_DIR = PROJECT_ROOT / "cache" / "wikipedia"
@@ -121,7 +135,7 @@ def render_first_run_page(data_root, db_path):
         1. Choose `Processing` in the sidebar.
         2. Create or select a dataset folder.
         3. Copy audio into that dataset's `audio` folder, or point the app at an existing audio folder.
-        4. Run BirdNET Analyzer and/or BatDetect2.
+        4. Run Birda, BirdNET Analyzer, and/or BatDetect2.
         5. Press `Regenerate manifest`.
         6. Press `Append to database` for new datasets, or `Rebuild listed datasets` after re-running analyzer outputs.
         """
@@ -316,6 +330,11 @@ def metric_box(label, value):
         """,
         unsafe_allow_html=True,
     )
+
+
+def detector_display_name(value):
+    key = str(value or "unknown").strip().casefold()
+    return DETECTOR_DISPLAY_NAMES.get(key, str(value or "Unknown"))
 
 
 def inject_design_system():
@@ -684,7 +703,7 @@ def complete_time_counts(df, resolution):
 
 def render_detection_count_note():
     st.info(
-        "Counts are detection activity, not animal abundance. BirdNET rows are species predictions for short audio windows, "
+        "Counts are detection activity, not animal abundance. Birda and BirdNET Analyzer rows are species predictions for short audio windows, "
         "while BatDetect2 rows are detected bat call events; one individual can produce multiple detections."
     )
 
@@ -1216,7 +1235,7 @@ def render_audio_inspector(row, data_root, dataset_type, key_prefix, context_df=
             )
         elif playback_kind not in {"bats", "batdetect2"}:
             st.caption(
-                "BirdNET identifies the species in an audio window but does not classify the vocalization "
+                "Birda and BirdNET Analyzer identify the species in an audio window but do not classify the vocalization "
                 "as song, contact call, or alarm call."
             )
 
@@ -1786,13 +1805,13 @@ def render_occurrence_matrix(occurrence_matrix, time_axis_label):
     st.markdown(matrix_html, unsafe_allow_html=True)
 
 
-def checkbox_selection(label, options, default_options, key_prefix):
+def checkbox_selection(label, options, default_options, key_prefix, format_func=str):
     selected = []
     st.caption(label)
     defaults = set(default_options)
     for index, option in enumerate(options):
         option_key = re.sub(r"[^A-Za-z0-9_]+", "_", str(option))
-        if st.checkbox(str(option), value=option in defaults, key=f"{key_prefix}_{index}_{option_key}"):
+        if st.checkbox(format_func(option), value=option in defaults, key=f"{key_prefix}_{index}_{option_key}"):
             selected.append(option)
     return selected
 
@@ -2076,6 +2095,57 @@ def output_unit_count(folder, suffixes):
     return len(units)
 
 
+def replace_filename_suffix(path, old_suffix, new_suffix):
+    if not path.name.casefold().endswith(old_suffix.casefold()):
+        return None
+    return path.with_name(path.name[: -len(old_suffix)] + new_suffix)
+
+
+def normalize_birda_output_names(output_dir, overwrite=False):
+    renamed = []
+    if not output_dir.exists():
+        return renamed
+    for path in sorted(item for item in output_dir.rglob("*") if item.is_file()):
+        for native_suffix, canonical_suffix in BIRDA_NATIVE_TO_CANONICAL_SUFFIX.items():
+            target = replace_filename_suffix(path, native_suffix, canonical_suffix)
+            if target is None:
+                continue
+            if target.exists():
+                if overwrite:
+                    target.unlink()
+                else:
+                    break
+            path.replace(target)
+            renamed.append(target)
+            break
+    return renamed
+
+
+def create_birda_skip_aliases(output_dir):
+    aliases = []
+    if not output_dir.exists():
+        return aliases
+    canonical_suffix = ".Birda.results.csv"
+    native_suffix = ".BirdNET.results.csv"
+    for path in output_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        alias = replace_filename_suffix(path, canonical_suffix, native_suffix)
+        if alias is None or alias.exists():
+            continue
+        try:
+            os.link(path, alias)
+        except OSError:
+            shutil.copy2(path, alias)
+        aliases.append(alias)
+    return aliases
+
+
+def remove_birda_skip_aliases(aliases):
+    for path in aliases:
+        path.unlink(missing_ok=True)
+
+
 def audio_has_direct_outputs(audio_path, output_dir, suffixes):
     return any((output_dir / f"{audio_path.name}{suffix}").exists() for suffix in suffixes)
 
@@ -2084,7 +2154,14 @@ def analyzer_output_keys(output_dir, analyzer):
     if not output_dir.exists() or not output_dir.is_dir():
         return set()
     suffixes = {
-        "birda": (".birdnet.results.csv", ".birdnet.results.json", ".birdnet.results.parquet"),
+        "birda": (
+            ".birda.results.csv",
+            ".birda.results.json",
+            ".birda.results.parquet",
+            ".birdnet.results.csv",
+            ".birdnet.json",
+            ".birdnet.results.parquet",
+        ),
         "birdnet": (
             ".birdnet.selection.table.txt",
             ".birdnet.selection.table.csv",
@@ -2565,14 +2642,24 @@ def render_birda_bird_runner(audio_dir, birda_output_dir, birdnet_lat, birdnet_l
         command += extra_args + [str(audio_dir)]
 
         st.code(" ".join(f'"{part}"' if " " in part else part for part in command), language="powershell")
-        returncode, stdout, stderr = run_monitored_command(
-            command,
-            PROJECT_ROOT,
-            "Birda birds",
-            audio_dir,
+        skip_aliases = [] if birda_force else create_birda_skip_aliases(birda_output_dir)
+        try:
+            returncode, stdout, stderr = run_monitored_command(
+                command,
+                PROJECT_ROOT,
+                "Birda birds",
+                audio_dir,
+                birda_output_dir,
+                BIRDA_OUTPUT_SUFFIXES,
+            )
+        finally:
+            remove_birda_skip_aliases(skip_aliases)
+        renamed_outputs = normalize_birda_output_names(
             birda_output_dir,
-            (".csv", ".json", ".parquet"),
+            overwrite=birda_force and returncode == 0,
         )
+        if renamed_outputs:
+            st.caption(f"Stored {len(renamed_outputs):,} Birda output file(s) with `.Birda.results` names.")
         processing_dataset_inventory.clear()
         show_command_result(returncode, stdout, stderr)
 
@@ -2798,7 +2885,7 @@ def create_detection_clips(
             continue
 
         species = sorted({str(row.get("CommonName") or "Unknown") for row in rows})
-        detectors = sorted({str(row.get("Detector") or "unknown") for row in rows})
+        detectors = sorted({detector_display_name(row.get("Detector")) for row in rows})
         first_row = rows[0]
         species_part = clean_clip_species_name("_".join(species[:3]))
         if len(species) > 3:
@@ -2948,12 +3035,14 @@ def render_clip_snr_analytics(detections, detectors, min_confidence, min_snr_db,
     snr_tab, timeline_tab = st.tabs(["Confidence And SNR", "Night Timeline"])
     with snr_tab:
         display_df = plot_df.sample(10000, random_state=42) if len(plot_df) > 10000 else plot_df
+        display_df = display_df.copy()
+        display_df["Analyzer"] = display_df["Detector"].map(detector_display_name)
         fig = px.scatter(
             display_df,
             x="Confidence",
             y="SnrDb",
             color="NoiseDbfs",
-            symbol="Detector",
+            symbol="Analyzer",
             hover_data=["CommonName", "DateTime", "SignalDbfs", "MeanDbfs"],
             labels={
                 "SnrDb": "Signal-to-noise ratio (dB)",
@@ -3048,11 +3137,13 @@ def render_clip_quality_plot(detections, detectors, min_confidence):
     display_df = plot_df
     if len(display_df) > 10000:
         display_df = display_df.sample(10000, random_state=42)
+    display_df = display_df.copy()
+    display_df["Analyzer"] = display_df["Detector"].map(detector_display_name)
     fig = px.scatter(
         display_df,
         x="Confidence",
         y="MeanDbfs",
-        color="Detector",
+        color="Analyzer",
         hover_data=["CommonName"],
         labels={"MeanDbfs": "Mean level (dBFS)"},
         render_mode="webgl",
@@ -3094,8 +3185,10 @@ def render_clip_quality_plot(detections, detectors, min_confidence):
                 "Linear R-squared": detector_pearson ** 2,
             }
         )
+    detector_correlation_df = pd.DataFrame(detector_correlations)
+    detector_correlation_df["Detector"] = detector_correlation_df["Detector"].map(detector_display_name)
     st.dataframe(
-        pd.DataFrame(detector_correlations),
+        detector_correlation_df,
         width="stretch",
         hide_index=True,
         column_config={
@@ -3135,7 +3228,13 @@ def render_clip_creator(data_root, resolved_db_path, dataset_ids, dataset_dir):
     detectors = sorted(detections["Detector"].fillna("birdnet").astype(str).unique())
     dataset_summary = ", ".join(str(dataset_id) for dataset_id in dataset_ids)
     st.caption(f"Using detections from database dataset(s): {dataset_summary}")
-    selected_detectors = checkbox_selection("Detectors to clip", detectors, detectors, "clip_detector")
+    selected_detectors = checkbox_selection(
+        "Analyzers to clip",
+        detectors,
+        detectors,
+        "clip_detector",
+        format_func=detector_display_name,
+    )
     quality_presets = {
         "Balanced library (recommended)": {
             "confidence": 0.20,
@@ -3313,8 +3412,8 @@ def set_birdnet_coordinates(lat, lon, refresh_widgets=False):
 
 
 def render_birdnet_location_picker():
-    st.markdown("**BirdNET Location**")
-    st.caption("Use an address search or click the map. BirdNET uses latitude/longitude to choose the likely species list.")
+    st.markdown("**Bird Analysis Location**")
+    st.caption("Use an address search or click the map. Birda and BirdNET Analyzer use latitude/longitude to choose the likely species list.")
 
     if "birdnet_latitude" not in st.session_state:
         st.session_state["birdnet_latitude"] = 55.6761
@@ -3384,7 +3483,7 @@ def render_birdnet_location_picker():
             fill=True,
             fill_color="#d73027",
             fill_opacity=0.85,
-            tooltip="BirdNET location",
+            tooltip="Bird analysis location",
             popup=f"{lat:.6f}, {lon:.6f}",
         ).add_to(fmap)
         map_key = f"birdnet_location_map_{lat:.6f}_{lon:.6f}"
@@ -3518,7 +3617,7 @@ def processing_folder_label(dataset_dir):
     birda_pending = inventory["birda_pending"]
     birdnet_pending = inventory["birdnet_pending"]
     batdetect_pending = inventory["batdetect2_pending"]
-    status = f"new: {birda_pending} Birda, {birdnet_pending} BirdNET, {batdetect_pending} BatDetect2"
+    status = f"new: {birda_pending} Birda, {birdnet_pending} BirdNET Analyzer, {batdetect_pending} BatDetect2"
     return f"{dataset_dir.name} - {audio_count} audio - {status}"
 
 
@@ -3770,6 +3869,10 @@ def render_processing_page(data_root, db_path):
     batdetect_output_dir = dataset_dir / "batdetect2_outputs"
     birda_output_dir = dataset_dir / "birda"
 
+    normalized_birda_outputs = normalize_birda_output_names(birda_output_dir)
+    if normalized_birda_outputs:
+        processing_dataset_inventory.clear()
+
     inventory = processing_dataset_inventory(str(dataset_dir.resolve()))
     target_count = inventory["audio"]
     birdnet_output_count = inventory["birdnet_outputs"]
@@ -3779,6 +3882,11 @@ def render_processing_page(data_root, db_path):
     birdnet_pending_count = inventory["birdnet_pending"]
     batdetect_pending_count = inventory["batdetect2_pending"]
     with project_tab:
+        if normalized_birda_outputs:
+            st.caption(
+                f"Renamed {len(normalized_birda_outputs):,} legacy Birda output file(s) from "
+                "`.BirdNET.results` to `.Birda.results`."
+            )
         if st.button("Create dataset folders"):
             dataset_audio_dir.mkdir(parents=True, exist_ok=True)
             birda_output_dir.mkdir(parents=True, exist_ok=True)
@@ -3791,7 +3899,7 @@ def render_processing_page(data_root, db_path):
         status_cols = st.columns(4)
         status_cols[0].metric("Audio files", f"{target_count:,}")
         status_cols[1].metric("New for Birda", f"{birda_pending_count:,}")
-        status_cols[2].metric("New for BirdNET", f"{birdnet_pending_count:,}")
+        status_cols[2].metric("New for BirdNET Analyzer", f"{birdnet_pending_count:,}")
         status_cols[3].metric("New for BatDetect2", f"{batdetect_pending_count:,}")
         if target_count and not birdnet_output_count and not batdetect_output_count and not birda_output_count:
             st.success("This dataset has audio and no analyzer outputs yet. It is ready to analyze.")
@@ -3946,7 +4054,7 @@ def render_processing_page(data_root, db_path):
                     "Detections in database": db_detector_counts.get("birda", 0),
                 },
                 {
-                    "Analyzer": "BirdNET",
+                    "Analyzer": "BirdNET Analyzer",
                     "Output files": birdnet_output_count,
                     "WAVs not analyzed": birdnet_pending_count,
                     "Detections in database": db_detector_counts.get("birdnet", 0),
@@ -3974,7 +4082,7 @@ def render_processing_page(data_root, db_path):
         ]
         missing_project_ids = set(project_dataset_ids) - db_project_ids
         if output_total == 0:
-            st.warning("No analyzer outputs are available yet. Run Birda, BirdNET, or BatDetect2 before updating the database.")
+            st.warning("No analyzer outputs are available yet. Run Birda, BirdNET Analyzer, or BatDetect2 before updating the database.")
         elif not project_dataset_ids:
             st.warning("This project is not in the manifest yet. Use Update selected project; it will generate the manifest first.")
         elif not resolved_db_path.exists() or missing_project_ids:
@@ -3984,7 +4092,7 @@ def render_processing_page(data_root, db_path):
                 "This database predates output tracking. Use Update selected project once; future changes will then be detected automatically."
             )
         elif changed_analyzers:
-            analyzer_names = ", ".join(detector_names.title() for detector_names in changed_analyzers)
+            analyzer_names = ", ".join(detector_display_name(name) for name in changed_analyzers)
             st.warning(f"Output-file counts changed for {analyzer_names}. Use Update selected project.")
         else:
             st.success("The selected project appears up to date. Run Update selected project after adding or replacing analyzer outputs.")
@@ -4456,6 +4564,8 @@ with inspector_tab:
     else:
         st.caption("Select a detection row to load its audio and spectrogram.")
         detection_table = filtered_df[visible_columns].reset_index(drop=True)
+        if "Detector" in detection_table.columns:
+            detection_table["Detector"] = detection_table["Detector"].map(detector_display_name)
         table_event = st.dataframe(
             detection_table,
             width="stretch",

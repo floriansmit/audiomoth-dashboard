@@ -23,6 +23,8 @@ BIRDNET_SUFFIXES = (
 )
 BATDETECT2_SUFFIXES = (".WAV.csv", ".wav.csv", ".WAV.json", ".wav.json")
 BIRDA_SUFFIXES = (
+    ".Birda.results.csv",
+    ".Birda.csv",
     ".BirdNET.results.csv",
     ".BirdNET.csv",
     ".Perch.results.csv",
@@ -61,9 +63,20 @@ def strip_batdetect2_suffix(filename):
 
 def strip_birda_suffix(filename):
     for suffix in BIRDA_SUFFIXES:
-        if filename.endswith(suffix):
+        if filename.casefold().endswith(suffix.casefold()):
             return filename[: -len(suffix)]
     return Path(filename).stem
+
+
+def birda_source_files(source_dir):
+    preferred = {}
+    for path in sorted(source_dir.rglob("*.csv")):
+        key = strip_birda_suffix(path.name).casefold()
+        priority = 2 if path.name.casefold().endswith(".birda.results.csv") else 1
+        current = preferred.get(key)
+        if current is None or priority > current[0]:
+            preferred[key] = (priority, path)
+    return sorted(item[1] for item in preferred.values())
 
 
 def parse_recording_datetime(name):
@@ -517,7 +530,7 @@ def import_dataset(row, data_root):
         elif detector == "batdetect2":
             source_files = sorted(source_dir.rglob("*.csv"))
         else:
-            source_files = sorted(source_dir.rglob("*.csv"))
+            source_files = birda_source_files(source_dir)
 
         import_status.append(
             {
